@@ -131,31 +131,38 @@ with tab1:
                 layer="below",
                 line_width=0,
             )
-
-        # 3. 🟣 化療事件：使用 add_vline 畫出垂直虛線
+        # 3. 🟣 化療事件：改用互動線段，讓滑鼠移到虛線上就能檢視詳細資訊
         if not event_df.empty:
           chemo_df = event_df[event_df["類別"] == "化療"]
           other_events_df = event_df[event_df["類別"] != "化療"]
 
-          # 畫出化療垂直虛線
+          y_min = item_df["數值"].min()
+          y_max = item_df["數值"].max()
+
+          first_chemo = True
           for _, chemo in chemo_df.iterrows():
             c_date = chemo["日期"]
-            fig.add_vline(
-                x=c_date, line_width=2, line_dash="dash", line_color=CHEMO_COLOR
-            )
 
-          # 為了讓圖例 (Legend) 出現化療選項，加一個圖例專用的隱形點
-          if not chemo_df.empty:
+            # 利用微小的線段來代表化療垂直線，並賦予完整 hovertemplate
             fig.add_trace(
                 go.Scatter(
-                    x=[chemo_df.iloc[0]["日期"]],
-                    y=[item_df["數值"].iloc[0]],
-                    mode="markers",
-                    name="🟣 化療紀錄",
-                    marker=dict(size=0, color=CHEMO_COLOR),
-                    hoverinfo="skip",
+                    x=[c_date, c_date],
+                    y=[y_min * 0.8, y_max * 1.2],
+                    mode="lines",
+                    name="🟣 化療紀錄" if first_chemo else "",
+                    showlegend=first_chemo,
+                    line=dict(color=CHEMO_COLOR, width=2.5, dash="dash"),
+                    hovertemplate=(
+                        "<b>【化療紀錄】</b><br>"
+                        "<b>日期</b>: %{x|%Y-%m-%d}<br>"
+                        f"<b>項目</b>: {chemo['項目']}<br>"
+                        f"<b>醫院/診所</b>: {chemo['醫院診所']}<br>"
+                        f"<b>備註</b>: {chemo['備註']}<extra></extra>"
+                    ),
                 )
             )
+            first_chemo = False
+
 
           # 4. 其他事件（看診/用藥/其他）：互動圖示呈現
           category_icons = {
