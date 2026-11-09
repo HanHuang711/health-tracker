@@ -115,26 +115,35 @@ with tab1:
             )
         )
 
-        # 2. 🏥 入院到出院淡紅色背景區塊
+        # 2. 🏥 多筆入院到出院背景淡色區塊（依時間先後順序獨立配對）
         if not event_df.empty:
-          admit_records = event_df[
-              event_df["項目"].str.contains("入院", na=False)
+          # 依照日期排序事件，確保配對正確
+          sorted_events = event_df.sort_values("日期")
+          admit_records = sorted_events[
+              sorted_events["項目"].str.contains("入院", na=False)
           ]
-          discharge_records = event_df[
-              event_df["項目"].str.contains("出院", na=False)
+          discharge_records = sorted_events[
+              sorted_events["項目"].str.contains("出院", na=False)
           ]
 
           for _, admit in admit_records.iterrows():
             admit_date = admit["日期"]
+            # 尋找這筆入院日期之後、且尚未被配對過最近的一筆出院日期
             matching_discharge = discharge_records[
                 discharge_records["日期"] >= admit_date
             ]
-            discharge_date = (
-                matching_discharge.iloc[0]["日期"]
-                if not matching_discharge.empty
-                else admit_date + pd.Timedelta(days=5)
-            )
+            
+            if not matching_discharge.empty:
+              discharge_date = matching_discharge.iloc[0]["日期"]
+              # 將已經配對過的出院記錄從候選名單中移除，避免重複配對同一筆
+              discharge_records = discharge_records[
+                  discharge_records["日期"] != discharge_date
+              ]
+            else:
+              # 如果剛好沒寫出院，預設 5 天
+              discharge_date = admit_date + pd.Timedelta(days=5)
 
+            # 加上獨立的住院背景區段
             fig.add_vrect(
                 x0=admit_date,
                 x1=discharge_date,
@@ -143,7 +152,7 @@ with tab1:
                 layer="below",
                 line_width=0,
             )
-
+            
         # 3. 🟣 化療事件：使用互動線段，保持乾淨虛線外觀並支援滑鼠懸停看詳情
         if not event_df.empty:
           chemo_df = event_df[event_df["類別"] == "化療"]
