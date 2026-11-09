@@ -72,6 +72,8 @@ with tab1:
         # 🎨 顏色與圖示統一設定
         # -------------------------------------------------------------
         CHEMO_COLOR = "#c8c8c8"  # 化療垂直虛線顏色
+        NORMAL_POINT_COLOR = "#64dcf0"  # 正常驗血點顏色
+        ABNORMAL_POINT_COLOR = "#FF4B4B"  # 異常驗血點顏色 (紅色)
 
         category_styles = {
             "看診": {
@@ -91,7 +93,20 @@ with tab1:
             },
         }
 
-        # 1. 繪製驗血數據折線
+        # 檢查是否有「數值異常」欄位，若無則補空欄位防呆
+        if "數值異常" not in item_df.columns:
+          item_df["數值異常"] = ""
+
+        # 動態決定每個數據點的顏色：如果有填寫 H/L 等異常標記，則顯示紅色，否則正常
+        point_colors = []
+        for _, row in item_df.iterrows():
+          val_abnormal = row.get("數值異常", "")
+          if pd.notna(val_abnormal) and str(val_abnormal).strip() != "":
+            point_colors.append(ABNORMAL_POINT_COLOR)
+          else:
+            point_colors.append(NORMAL_POINT_COLOR)
+
+        # 1. 繪製驗血數據折線（支援異常點變紅）
         fig.add_trace(
             go.Scatter(
                 x=item_df["日期"],
@@ -100,16 +115,21 @@ with tab1:
                 name=selected_item,
                 text=item_df["數值"],
                 textposition="top center",
+                line=dict(color="#1F77B4", width=2),  # 折線本身維持沉穩的藍色
+                marker=dict(
+                    size=10, color=point_colors
+                ),  # 依據異常狀況動態變色
                 hovertemplate=(
                     "<b>日期</b>: %{x|%Y-%m-%d}<br>"
                     "<b>數值</b>: %{y}<br>"
                     "<b>單位</b>: %{customdata[0]}<br>"
                     "<b>參考範圍</b>: %{customdata[1]}<br>"
-                    "<b>醫院診所</b>: %{customdata[2]}<br>"
-                    "<b>備註</b>: %{customdata[3]}<extra></extra>"
+                    "<b>異常狀態</b>: %{customdata[2]}<br>"
+                    "<b>醫院診所</b>: %{customdata[3]}<br>"
+                    "<b>備註</b>: %{customdata[4]}<extra></extra>"
                 ),
                 customdata=item_df[
-                    ["單位", "參考範圍", "醫院診所", "備註"]
+                    ["單位", "參考範圍", "數值異常", "醫院診所", "備註"]
                 ].values,
             )
         )
@@ -247,7 +267,7 @@ with tab1:
         st.subheader("歷史明細")
         st.dataframe(
             item_df[
-                ["日期", "數值", "單位", "參考範圍", "醫院診所", "備註"]
+                ["日期", "數值", "單位", "參考範圍", "數值異常", "醫院診所", "備註"]
             ],
             use_container_width=True,
         )
@@ -264,33 +284,26 @@ with tab2:
   st.caption("💡 提示：你可以直接雙擊下方表格儲存格修改文字，編輯完後點擊最下方按鈕即可同步至 Google 雲端！")
 
   if not df.empty:
-    # 格式化日期顯示以利編輯
     edit_df = df.copy()
     if "日期" in edit_df.columns:
       edit_df["日期"] = edit_df["日期"].dt.strftime("%Y-%m-%d")
 
-    # 可互動編輯的表格元件
     edited_df = st.data_editor(
         edit_df,
         use_container_width=True,
-        num_rows="dynamic",  # 允許使用者直接在表格最下方新增/刪除資料列
+        num_rows="dynamic",
         key="health_data_editor",
     )
 
-    # 儲存按鈕
     if st.button("💾 儲存所有修改至 Google 試算表", type="primary"):
       if sheet is not None:
         try:
-          # 將空值 nan 轉為空字串，防止寫入 Google 試算表時出錯
           updated_data = edited_df.fillna("").astype(str).values.tolist()
-
-          # 清空試算表並重新覆寫標題與內容
           sheet.clear()
           header = list(edited_df.columns)
           sheet.update([header] + updated_data)
-
           st.success("✅ 修改成功！所有資料已更新至 Google 試算表。")
-          st.rerun()  # 刷新頁面重新讀取最新數據
+          st.rerun()
         except Exception as e:
           st.error(f"❌ 寫入雲端失敗：{e}")
       else:
