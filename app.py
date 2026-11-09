@@ -6,7 +6,7 @@ from google.oauth2.service_account import Credentials
 
 # 頁面基本設定
 st.set_page_config(
-    page_title="個人健康與就醫歷程", page_icon="🩺", layout="centered"
+    page_title="阿爸的人生劇本", page_icon="🩺", layout="centered"
 )
 
 SCOPES = [
@@ -43,7 +43,7 @@ def load_data():
 
 sheet, df = load_data()
 
-st.title("🩺 健康與就醫歷程")
+st.title("🩺 身體的功課")
 
 # 分頁籤設計
 tab1, tab2, tab3 = st.tabs(["📊 數據趨勢", "📋 在線編輯與歷程", "➕ 新增紀錄"])
