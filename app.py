@@ -66,10 +66,22 @@ with tab1:
       )
 
       if not item_df.empty:
-        # 使用 Plotly Graph Objects
         fig = go.Figure()
 
-        # 1. 繪製驗血數值折線圖
+        # -------------------------------------------------------------
+        # 🎨 顏色設定區：在這裡自由替換你想要的顏色色碼或名稱！
+        # -------------------------------------------------------------
+        CHEMO_COLOR = (
+            "#8A2BE2"  # 化療虛線顏色 (例如: #8A2BE2 紫羅蘭色、#E63946 鮮紅色)
+        )
+
+        category_colors = {
+            "看診": "#1F77B4",  # 藍色
+            "用藥": "#2CA02C",  # 綠色
+            "其他": "#FF7F0E",  # 橘色
+        }
+
+        # 1. 繪製驗血數據折線
         fig.add_trace(
             go.Scatter(
                 x=item_df["日期"],
@@ -92,7 +104,7 @@ with tab1:
             )
         )
 
-        # 2. 🏥 處理入院到出院的背景區段 (淡紅色區間)
+        # 2. 🏥 入院到出院背景淡色區塊
         if not event_df.empty:
           admit_records = event_df[
               event_df["項目"].str.contains("入院", na=False)
@@ -121,135 +133,10 @@ with tab1:
                 line_width=0,
             )
 
-        # 3. 🎯 處理事件圖示與化療垂直虛線
+        # 3. 🟣 化療事件：垂直虛線 + 懸停互動 (隱藏上方固定文字標籤)
         if not event_df.empty:
-          y_mid = (item_df["數值"].min() + item_df["數值"].max()) / 2
+          y_min = item_df["數值"].min()
+          y_max = item_df["數值"].max()
+          y_mid = (y_min + y_max) / 2
 
-          # 將「化療」獨立出來畫垂直虛線
-          chemo_df = event_df[event_df["類別"] == "化療"]
-          other_events_df = event_df[event_df["類別"] != "化療"]
-
-          # 繪製化療的垂直虛線
-          for _, chemo in chemo_df.iterrows():
-            chemo_date = chemo["日期"]
-            chemo_title = (
-                f"化療: {chemo['項目']} ({chemo['醫院診所']}) {chemo['備註']}"
-            )
-
-            fig.add_vline(
-                x=chemo_date,
-                line_width=2,
-                line_dash="dash",
-                line_color="purple",
-            )
-
-            # 在虛線上方加上標註讓滑鼠移過去或一眼看出
-            fig.add_annotation(
-                x=chemo_date,
-                y=1.02,
-                yref="paper",
-                text=f"🟣 {chemo['項目']}",
-                showarrow=False,
-                font=dict(color="purple", size=10),
-                textangle=-30,
-            )
-
-          # 其他事件（如看診、用藥、其他）維持滑鼠懸停點呈現
-          category_icons = {
-              "看診": "🔵 看診紀錄",
-              "用藥": "🟢 用藥紀錄",
-              "其他": "🚩 特殊事件",
-          }
-
-          for cat, group in other_events_df.groupby("類別"):
-            name_label = category_icons.get(cat, f"📌 {cat}")
-
-            fig.add_trace(
-                go.Scatter(
-                    x=group["日期"],
-                    y=[y_mid] * len(group),
-                    mode="markers",
-                    name=name_label,
-                    marker=dict(size=12, symbol="diamond"),
-                    hovertemplate=(
-                        "<b>【%{customdata[0]}】</b><br>"
-                        "<b>日期</b>: %{x}<br>"
-                        "<b>項目</b>: %{customdata[1]}<br>"
-                        "<b>醫院/診所</b>: %{customdata[2]}<br>"
-                        "<b>備註</b>: %{customdata[3]}<extra></extra>"
-                    ),
-                    customdata=group[
-                        ["類別", "項目", "醫院診所", "備註"]
-                    ].values,
-                )
-            )
-
-        fig.update_layout(
-            title=f"{selected_item} 歷史變化與事件對照圖",
-            xaxis_title="日期",
-            yaxis_title="數值",
-            hovermode="closest",
-            margin=dict(t=60),
-            legend=dict(
-                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
-            ),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.subheader("歷史明細")
-        st.dataframe(
-            item_df[
-                ["日期", "數值", "單位", "參考範圍", "醫院診所", "備註"]
-            ],
-            use_container_width=True,
-        )
-      else:
-        st.info("該項目尚無數值紀錄。")
-    else:
-      st.info("尚無類別為『驗血』的數據。")
-  else:
-    st.warning("目前試算表中沒有資料。")
-
-# Tab 2: 完整歷史清單
-with tab2:
-  st.header("就醫與檢驗完整歷程")
-  if not df.empty:
-    category_filter = st.multiselect(
-        "篩選類別", options=df["類別"].unique(), default=df["類別"].unique()
-    )
-    filtered_df = df[df["類別"].isin(category_filter)]
-    st.dataframe(filtered_df, use_container_width=True)
-  else:
-    st.info("目前試算表中沒有資料。")
-
-# Tab 3: 新增筆記 / 紀錄
-with tab3:
-  st.header("新增筆記 / 紀錄")
-  with st.form("add_data_form", clear_on_submit=True):
-    date_val = st.date_input("日期")
-    cat_val = st.selectbox("類別", ["驗血", "看診", "用藥", "化療", "其他"])
-    item_val = st.text_input("項目 (如: 入院, 出院, 第1次化療, 門診追蹤)")
-    val_val = st.text_input("數值 (驗血才需填寫，無則留空)")
-    unit_val = st.text_input("單位 (如: mg/dL)")
-    ref_val = st.text_input("參考範圍 (如: 70-99)")
-    hosp_val = st.text_input("醫院 / 診所", value="林口長庚")
-    note_val = st.text_area("醫師囑咐 / 備註")
-
-    submitted = st.form_submit_button("寫入 Google 試算表")
-
-    if submitted:
-      if sheet is not None:
-        new_row = [
-            str(date_val),
-            cat_val,
-            item_val,
-            val_val,
-            unit_val,
-            ref_val,
-            hosp_val,
-            note_val,
-        ]
-        sheet.append_row(new_row)
-        st.success("成功新增資料！請刷新頁面查看最新互動圖表。")
-      else:
-        st.error("連線至 Google 試算表失敗，無法寫入。")
+          chemo_df = event_df
