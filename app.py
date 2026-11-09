@@ -46,7 +46,6 @@ sheet, df = load_data()
 
 st.title("🩺 健康與就醫歷程")
 
-# 分頁籤設計
 tab1, tab2, tab3 = st.tabs(["📊 數據趨勢", "📋 完整歷程", "➕ 新增紀錄"])
 
 # Tab 1: 驗血數據趨勢圖
@@ -70,14 +69,15 @@ with tab1:
         fig = go.Figure()
 
         # -------------------------------------------------------------
-        # 🎨 顏色設定區：在這裡自由替換你想要的顏色！
+        # 🎨 顏色與圖示設定區
         # -------------------------------------------------------------
-        CHEMO_COLOR = "#c8c8c8"  # 化療垂直虛線顏色 (例如紫羅蘭色 #8A2BE2)
+        CHEMO_COLOR = "#c8c8c8"  # 化療垂直虛線顏色
 
-        category_colors = {
-            "看診": "#1F77B4",  # 藍色
-            "用藥": "#2CA02C",  # 綠色
-            "其他": "#FF7F0E",  # 橘色
+        # 各類別對應的顏色與圖示形狀 (circle=圓點, diamond=菱形, square=方塊)
+        category_styles = {
+            "看診": {"color": "#1F77B4", "symbol": "circle", "label": "🔵 看診紀錄"},
+            "用藥": {"color": "#2CA02C", "symbol": "square", "label": "🟢 用藥紀錄"},
+            "其他": {"color": "#FF7F0E", "symbol": "diamond", "label": "🟠 特殊事件"}
         }
 
         # 1. 繪製驗血數據折線
@@ -131,19 +131,20 @@ with tab1:
                 layer="below",
                 line_width=0,
             )
-        # 3. 🟣 化療事件：改用互動線段，讓滑鼠移到虛線上就能檢視詳細資訊
+
+        # 3. 🟣 化療事件與其他事件處理
         if not event_df.empty:
           chemo_df = event_df[event_df["類別"] == "化療"]
           other_events_df = event_df[event_df["類別"] != "化療"]
 
+          # 畫出化療垂直虛線（支援滑鼠懸停）
           y_min = item_df["數值"].min()
           y_max = item_df["數值"].max()
+          y_mid = (y_min + y_max) / 2 if len(item_df) > 0 else 0
 
           first_chemo = True
           for _, chemo in chemo_df.iterrows():
             c_date = chemo["日期"]
-
-            # 利用微小的線段來代表化療垂直線，並賦予完整 hovertemplate
             fig.add_trace(
                 go.Scatter(
                     x=[c_date, c_date],
@@ -163,29 +164,21 @@ with tab1:
             )
             first_chemo = False
 
-
-          # 4. 其他事件（看診/用藥/其他）：互動圖示呈現
-          category_icons = {
-              "看診": "🔵 看診紀錄",
-              "用藥": "🟢 用藥紀錄",
-              "其他": "🚩 特殊事件",
-          }
-
-          y_mid = (
-              item_df["數值"].min() + item_df["數值"].max()
-          ) / 2 if len(item_df) > 0 else 0
-
+          # 4. 其他事件（看診、用藥、其他）：對應各自的圖示與顏色
           for cat, group in other_events_df.groupby("類別"):
-            name_label = category_icons.get(cat, f"📌 {cat}")
-            color = category_colors.get(cat, "gray")
+            style = category_styles.get(
+                cat, {"color": "gray", "symbol": "diamond", "label": f"📌 {cat}"}
+            )
 
             fig.add_trace(
                 go.Scatter(
                     x=group["日期"],
                     y=[y_mid] * len(group),
                     mode="markers",
-                    name=name_label,
-                    marker=dict(size=12, symbol="diamond", color=color),
+                    name=style["label"],
+                    marker=dict(
+                        size=13, symbol=style["symbol"], color=style["color"]
+                    ),
                     hovertemplate=(
                         "<b>【%{customdata[0]}】</b><br>"
                         "<b>日期</b>: %{x}<br>"
