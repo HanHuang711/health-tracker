@@ -35,7 +35,8 @@ def load_data():
     df = pd.DataFrame(data)
 
     if not df.empty and "日期" in df.columns:
-      df["日期"] = pd.to_datetime(df["日期"])
+      # 使用 format="mixed" 容許試算表中同時存在不同格式的日期（如 YYYY-MM-DD 與 YYYY/MM/DD HH:MM）
+      df["日期"] = pd.to_datetime(df["日期"], format="mixed", errors="coerce")
       df = df.sort_values("日期", ascending=False)
     return sheet, df
   except Exception as e:
