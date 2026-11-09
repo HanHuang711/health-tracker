@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
-# 頁面基本設定（適合手機瀏覽）
+# 頁面基本設定
 st.set_page_config(
     page_title="個人健康與就醫歷程", page_icon="🩺", layout="centered"
 )
@@ -33,7 +33,6 @@ def load_data():
     df = pd.DataFrame(data)
 
     if not df.empty and "日期" in df.columns:
-      # format="mixed" 相容相異日期格式
       df["日期"] = pd.to_datetime(df["日期"], format="mixed", errors="coerce")
       df = df.sort_values("日期", ascending=False)
     return sheet, df
@@ -117,7 +116,6 @@ with tab1:
 
         # 2. 🏥 多筆入院到出院背景淡色區塊（依時間先後順序獨立配對）
         if not event_df.empty:
-          # 依照日期排序事件，確保配對正確
           sorted_events = event_df.sort_values("日期")
           admit_records = sorted_events[
               sorted_events["項目"].str.contains("入院", na=False)
@@ -128,22 +126,18 @@ with tab1:
 
           for _, admit in admit_records.iterrows():
             admit_date = admit["日期"]
-            # 尋找這筆入院日期之後、且尚未被配對過最近的一筆出院日期
             matching_discharge = discharge_records[
                 discharge_records["日期"] >= admit_date
             ]
-            
+
             if not matching_discharge.empty:
               discharge_date = matching_discharge.iloc[0]["日期"]
-              # 將已經配對過的出院記錄從候選名單中移除，避免重複配對同一筆
               discharge_records = discharge_records[
                   discharge_records["日期"] != discharge_date
               ]
             else:
-              # 如果剛好沒寫出院，預設 5 天
               discharge_date = admit_date + pd.Timedelta(days=5)
 
-            # 加上獨立的住院背景區段
             fig.add_vrect(
                 x0=admit_date,
                 x1=discharge_date,
@@ -152,7 +146,7 @@ with tab1:
                 layer="below",
                 line_width=0,
             )
-            
+
         # 3. 🟣 化療事件：使用互動線段，保持乾淨虛線外觀並支援滑鼠懸停看詳情
         if not event_df.empty:
           chemo_df = event_df[event_df["類別"] == "化療"]
@@ -160,6 +154,7 @@ with tab1:
 
           y_min = item_df["數值"].min()
           y_max = item_df["數值"].max()
+          y_mid = (y_min + y_max) / 2 if len(item_df) > 0 else 0
 
           first_chemo = True
           for _, chemo in chemo_df.iterrows():
@@ -170,7 +165,7 @@ with tab1:
                     y=[y_min * 0.8, y_max * 1.2],
                     mode="lines",
                     name="化療紀錄",
-                    showlegend=first_chemo,  # 圖例只顯示一次，乾淨俐落
+                    showlegend=first_chemo,  # 圖例只顯示一次
                     line=dict(color=CHEMO_COLOR, width=2, dash="dash"),
                     hovertemplate=(
                         "<b>【化療紀錄】</b><br>"
@@ -182,12 +177,8 @@ with tab1:
                 )
             )
             first_chemo = False
-     
-          # 4. 其他事件（看診/用藥/其他）：過濾入院與出院，正確對應顏色與圖示
-          y_mid = (
-              item_df["數值"].min() + item_df["數值"].max()
-          ) / 2 if len(item_df) > 0 else 0
 
+          # 4. 其他事件（方案 B）：同類別同日期自動合併，不同類別保持獨立圖示與顏色
           for cat, group in other_events_df.groupby("類別"):
             # 排除純「入院」與「出院」項目標記
             filtered_group = group[
@@ -196,6 +187,28 @@ with tab1:
             if filtered_group.empty:
               continue
 
+            # 按「日期」將同類別的多筆事件合併成一個顯示點
+            aggregated_records = []
+            for date_key, date_subgroup in filtered_group.groupby("日期"):
+              items_list = []
+              for _, r in date_subgroup.iterrows():
+                item_text = f"{r['項目']}"
+                if pd.notna(r["備註"]) and str(r["備註"]).strip():
+                  item_text += f" ({r['備註']})"
+                items_list.append(item_text)
+
+              items_str = "<br>• ".join(items_list)
+              hosp_str = date_subgroup.iloc[0]["醫院診所"]
+
+              aggregated_records.append({
+                  "日期": date_key,
+                  "類別": cat,
+                  "項目內容": items_str,
+                  "醫院診所": hosp_str,
+              })
+
+            agg_df = pd.DataFrame(aggregated_records)
+
             style = category_styles.get(
                 cat,
                 {"color": "gray", "symbol": "diamond", "name": f"{cat}紀錄"},
@@ -203,8 +216,8 @@ with tab1:
 
             fig.add_trace(
                 go.Scatter(
-                    x=filtered_group["日期"],
-                    y=[y_mid] * len(filtered_group),
+                    x=agg_df["日期"],
+                    y=[y_mid] * len(agg_df),
                     mode="markers",
                     name=style["name"],
                     marker=dict(
@@ -213,12 +226,11 @@ with tab1:
                     hovertemplate=(
                         "<b>【%{customdata[0]}】</b><br>"
                         "<b>日期</b>: %{x|%Y-%m-%d}<br>"
-                        "<b>項目</b>: %{customdata[1]}<br>"
                         "<b>醫院/診所</b>: %{customdata[2]}<br>"
-                        "<b>備註</b>: %{customdata[3]}<extra></extra>"
+                        "<b>當日項目</b>:<br>• %{customdata[1]}<extra></extra>"
                     ),
-                    customdata=filtered_group[
-                        ["類別", "項目", "醫院診所", "備註"]
+                    customdata=agg_df[
+                        ["類別", "項目內容", "醫院診所"]
                     ].values,
                 )
             )
