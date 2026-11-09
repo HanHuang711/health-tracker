@@ -66,7 +66,7 @@ with tab1:
       )
 
       if not item_df.empty:
-        # 使用 Plotly Graph Objects 打造高度客製化的互動圖表
+        # 使用 Plotly Graph Objects
         fig = go.Figure()
 
         # 1. 繪製驗血數值折線圖
@@ -121,20 +121,47 @@ with tab1:
                 line_width=0,
             )
 
-        # 3. 🎯 處理特殊事件（滑鼠懸停 Hover 才顯示細節）
+        # 3. 🎯 處理事件圖示與化療垂直虛線
         if not event_df.empty:
-          # 計算事件呈現的 Y 軸高度（放在圖表中間垂直高度）
           y_mid = (item_df["數值"].min() + item_df["數值"].max()) / 2
 
-          # 依據類別分別建立懸停圖示
+          # 將「化療」獨立出來畫垂直虛線
+          chemo_df = event_df[event_df["類別"] == "化療"]
+          other_events_df = event_df[event_df["類別"] != "化療"]
+
+          # 繪製化療的垂直虛線
+          for _, chemo in chemo_df.iterrows():
+            chemo_date = chemo["日期"]
+            chemo_title = (
+                f"化療: {chemo['項目']} ({chemo['醫院診所']}) {chemo['備註']}"
+            )
+
+            fig.add_vline(
+                x=chemo_date,
+                line_width=2,
+                line_dash="dash",
+                line_color="purple",
+            )
+
+            # 在虛線上方加上標註讓滑鼠移過去或一眼看出
+            fig.add_annotation(
+                x=chemo_date,
+                y=1.02,
+                yref="paper",
+                text=f"🟣 {chemo['項目']}",
+                showarrow=False,
+                font=dict(color="purple", size=10),
+                textangle=-30,
+            )
+
+          # 其他事件（如看診、用藥、其他）維持滑鼠懸停點呈現
           category_icons = {
-              "化療": "🟣 化療事件",
               "看診": "🔵 看診紀錄",
               "用藥": "🟢 用藥紀錄",
               "其他": "🚩 特殊事件",
           }
 
-          for cat, group in event_df.groupby("類別"):
+          for cat, group in other_events_df.groupby("類別"):
             name_label = category_icons.get(cat, f"📌 {cat}")
 
             fig.add_trace(
@@ -162,6 +189,7 @@ with tab1:
             xaxis_title="日期",
             yaxis_title="數值",
             hovermode="closest",
+            margin=dict(t=60),
             legend=dict(
                 orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
             ),
@@ -204,7 +232,7 @@ with tab3:
     val_val = st.text_input("數值 (驗血才需填寫，無則留空)")
     unit_val = st.text_input("單位 (如: mg/dL)")
     ref_val = st.text_input("參考範圍 (如: 70-99)")
-    hosp_val = st.text_input("醫院 / 診所",value="林口長庚")
+    hosp_val = st.text_input("醫院 / 診所", value="林口長庚")
     note_val = st.text_area("醫師囑咐 / 備註")
 
     submitted = st.form_submit_button("寫入 Google 試算表")
