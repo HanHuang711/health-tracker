@@ -131,18 +131,16 @@ with tab1:
                 layer="below",
                 line_width=0,
             )
-
         # 3. 🟣 化療事件與其他事件處理
         if not event_df.empty:
           chemo_df = event_df[event_df["類別"] == "化療"]
           other_events_df = event_df[event_df["類別"] != "化療"]
 
-          # 畫出化療垂直虛線（支援滑鼠懸停）
           y_min = item_df["數值"].min()
           y_max = item_df["數值"].max()
           y_mid = (y_min + y_max) / 2 if len(item_df) > 0 else 0
 
-          first_chemo = True
+          # 畫出化療垂直虛線（支援滑鼠懸停）
           for _, chemo in chemo_df.iterrows():
             c_date = chemo["日期"]
             fig.add_trace(
@@ -150,8 +148,9 @@ with tab1:
                     x=[c_date, c_date],
                     y=[y_min * 0.8, y_max * 1.2],
                     mode="lines",
-                    name="🟣 化療紀錄" if first_chemo else "",
-                    showlegend=first_chemo,
+                    name="🟣 化療紀錄",
+                    legendgroup="chemo",
+                    showlegend=True,  # 讓圖例乾淨顯示為一條虛線
                     line=dict(color=CHEMO_COLOR, width=2.5, dash="dash"),
                     hovertemplate=(
                         "<b>【化療紀錄】</b><br>"
@@ -162,8 +161,41 @@ with tab1:
                     ),
                 )
             )
-            first_chemo = False
 
+          # 4. 其他事件（看診/用藥/其他）：排除入院出院，精準對應圖例顏色與形狀
+          for cat, group in other_events_df.groupby("類別"):
+            filtered_group = group[
+                ~group["項目"].str.contains("入院|出院", na=False)
+            ]
+            if filtered_group.empty:
+              continue
+
+            style = category_styles.get(
+                cat, {"color": "gray", "symbol": "diamond", "label": f"📌 {cat}"}
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=filtered_group["日期"],
+                    y=[y_mid] * len(filtered_group),
+                    mode="markers",
+                    name=style["label"],
+                    marker=dict(
+                        size=13, symbol=style["symbol"], color=style["color"]
+                    ),
+                    hovertemplate=(
+                        "<b>【%{customdata[0]}】</b><br>"
+                        "<b>日期</b>: %{x}<br>"
+                        "<b>項目</b>: %{customdata[1]}<br>"
+                        "<b>醫院/診所</b>: %{customdata[2]}<br>"
+                        "<b>備註</b>: %{customdata[3]}<extra></extra>"
+                    ),
+                    customdata=filtered_group[
+                        ["類別", "項目", "醫院診所", "備註"]
+                    ].values,
+                )
+            )
+        
           # 4. 其他事件（看診/用藥/其他）：排除「入院」與「出院」，其餘正常顯示互動圖示
           for cat, group in other_events_df.groupby("類別"):
             # 濾掉項目中包含「入院」或「出院」的紀錄，不顯示互動標示
