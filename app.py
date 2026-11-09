@@ -57,12 +57,14 @@ with tab1:
 
     if not blood_df.empty:
       blood_df["數值"] = pd.to_numeric(blood_df["數值"], errors="coerce")
-      items = blood_df["項目"].dropna().unique()
+      
+      # 取得所有不重複的血液指標，並透過 sorted() 進行文字排序
+      items = sorted(blood_df["項目"].dropna().unique().astype(str))
 
       selected_item = st.selectbox("選擇要檢視的血液指標", items)
 
       item_df = blood_df[blood_df["項目"] == selected_item].sort_values(
-          "項目"
+          "日期"
       )
 
       if not item_df.empty:
@@ -244,7 +246,7 @@ with tab1:
                     hovertemplate=(
                         "<b>【%{customdata[0]}】</b><br>"
                         "<b>日期</b>: %{x|%Y-%m-%d}<br>"
-                        "<b>醫院/診所</b>: %{customdata[2]}<br>"
+                        "<b>醫院/診所</b>: {customdata[2]}<br>"
                         "<b>當日項目</b>:<br>• %{customdata[1]}<extra></extra>"
                     ),
                     customdata=agg_df[
