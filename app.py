@@ -144,31 +144,36 @@ with tab1:
                 line_width=0,
             )
 
-        # 3. 🟣 化療事件：使用簡潔垂直虛線
+        # 3. 🟣 化療事件：使用互動線段，保持乾淨虛線外觀並支援滑鼠懸停看詳情
         if not event_df.empty:
           chemo_df = event_df[event_df["類別"] == "化療"]
           other_events_df = event_df[event_df["類別"] != "化療"]
 
-          for _, chemo in chemo_df.iterrows():
-            fig.add_vline(
-                x=chemo["日期"],
-                line_width=2,
-                line_dash="dash",
-                line_color=CHEMO_COLOR,
-            )
+          y_min = item_df["數值"].min()
+          y_max = item_df["數值"].max()
 
-          # 化療圖例標籤（全圖只加一次）
-          if not chemo_df.empty:
+          first_chemo = True
+          for _, chemo in chemo_df.iterrows():
+            c_date = chemo["日期"]
             fig.add_trace(
                 go.Scatter(
-                    x=[None],
-                    y=[None],
+                    x=[c_date, c_date],
+                    y=[y_min * 0.8, y_max * 1.2],
                     mode="lines",
                     name="化療紀錄",
+                    showlegend=first_chemo,  # 圖例只顯示一次，乾淨俐落
                     line=dict(color=CHEMO_COLOR, width=2, dash="dash"),
+                    hovertemplate=(
+                        "<b>【化療紀錄】</b><br>"
+                        "<b>日期</b>: %{x|%Y-%m-%d}<br>"
+                        f"<b>項目</b>: {chemo['項目']}<br>"
+                        f"<b>醫院/診所</b>: {chemo['醫院診所']}<br>"
+                        f"<b>備註</b>: {chemo['備註']}<extra></extra>"
+                    ),
                 )
             )
-
+            first_chemo = False
+     
           # 4. 其他事件（看診/用藥/其他）：過濾入院與出院，正確對應顏色與圖示
           y_mid = (
               item_df["數值"].min() + item_df["數值"].max()
