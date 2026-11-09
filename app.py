@@ -72,7 +72,7 @@ with tab1:
         # 🎨 顏色與圖示統一設定
         # -------------------------------------------------------------
         CHEMO_COLOR = "#c8c8c8"  # 化療垂直虛線顏色
-        NORMAL_POINT_COLOR = "#64dcf0"  # 正常驗血點顏色
+        NORMAL_POINT_COLOR = "#1F77B4"  # 正常驗血點顏色
         ABNORMAL_POINT_COLOR = "#FF4B4B"  # 異常驗血點顏色 (紅色)
 
         category_styles = {
