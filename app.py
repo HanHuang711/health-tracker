@@ -46,6 +46,7 @@ sheet, df = load_data()
 
 st.title("🩺 健康與就醫歷程")
 
+# 分頁籤設計
 tab1, tab2, tab3 = st.tabs(["📊 數據趨勢", "📋 完整歷程", "➕ 新增紀錄"])
 
 # Tab 1: 驗血數據趨勢圖
@@ -71,7 +72,7 @@ with tab1:
         # -------------------------------------------------------------
         # 🎨 顏色設定區：在這裡自由替換你想要的顏色！
         # -------------------------------------------------------------
-        CHEMO_COLOR = "#8A2BE2"  # 化療垂直虛線顏色 (例如紫羅蘭色 #8A2BE2)
+        CHEMO_COLOR = "#c8c8c8"  # 化療垂直虛線顏色 (例如紫羅蘭色 #8A2BE2)
 
         category_colors = {
             "看診": "#1F77B4",  # 藍色
@@ -131,7 +132,7 @@ with tab1:
                 line_width=0,
             )
 
-        # 3. 🟣 化療事件：使用 add_vline 畫出穩定可靠的垂直虛線
+        # 3. 🟣 化療事件：使用 add_vline 畫出垂直虛線
         if not event_df.empty:
           chemo_df = event_df[event_df["類別"] == "化療"]
           other_events_df = event_df[event_df["類別"] != "化療"]
@@ -143,7 +144,7 @@ with tab1:
                 x=c_date, line_width=2, line_dash="dash", line_color=CHEMO_COLOR
             )
 
-          # 為了讓圖例 (Legend) 出現化療選項，我們加一個隱藏或圖例專用的點
+          # 為了讓圖例 (Legend) 出現化療選項，加一個圖例專用的隱形點
           if not chemo_df.empty:
             fig.add_trace(
                 go.Scatter(
@@ -151,7 +152,7 @@ with tab1:
                     y=[item_df["數值"].iloc[0]],
                     mode="markers",
                     name="🟣 化療紀錄",
-                    marker=dict(size=0, color=CHEMO_COLOR),  # 點設為透明
+                    marker=dict(size=0, color=CHEMO_COLOR),
                     hoverinfo="skip",
                 )
             )
@@ -209,3 +210,53 @@ with tab1:
             ],
             use_container_width=True,
         )
+      else:
+        st.info("該項目尚無數值紀錄。")
+    else:
+      st.info("尚無類別為『驗血』的數據。")
+  else:
+    st.warning("目前試算表中沒有資料。")
+
+# Tab 2: 完整歷史清單
+with tab2:
+  st.header("就醫與檢驗完整歷程")
+  if not df.empty:
+    category_filter = st.multiselect(
+        "篩選類別", options=df["類別"].unique(), default=df["類別"].unique()
+    )
+    filtered_df = df[df["類別"].isin(category_filter)]
+    st.dataframe(filtered_df, use_container_width=True)
+  else:
+    st.info("目前試算表中沒有資料。")
+
+# Tab 3: 新增筆記 / 紀錄
+with tab3:
+  st.header("新增筆記 / 紀錄")
+  with st.form("add_data_form", clear_on_submit=True):
+    date_val = st.date_input("日期")
+    cat_val = st.selectbox("類別", ["驗血", "看診", "用藥", "化療", "其他"])
+    item_val = st.text_input("項目 (如: 入院, 出院, 第1次化療, 門診追蹤)")
+    val_val = st.text_input("數值 (驗血才需填寫，無則留空)")
+    unit_val = st.text_input("單位 (如: mg/dL)")
+    ref_val = st.text_input("參考範圍 (如: 70-99)")
+    hosp_val = st.text_input("醫院 / 診所", value="林口長庚")
+    note_val = st.text_area("醫師囑咐 / 備註")
+
+    submitted = st.form_submit_button("寫入 Google 試算表")
+
+    if submitted:
+      if sheet is not None:
+        new_row = [
+            str(date_val),
+            cat_val,
+            item_val,
+            val_val,
+            unit_val,
+            ref_val,
+            hosp_val,
+            note_val,
+        ]
+        sheet.append_row(new_row)
+        st.success("成功新增資料！請刷新頁面查看最新互動圖表。")
+      else:
+        st.error("連線至 Google 試算表失敗，無法寫入。")
