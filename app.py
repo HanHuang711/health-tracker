@@ -8,7 +8,7 @@ from google.oauth2.service_account import Credentials
 # 頁面基本設定
 st.set_page_config(
     page_title="個人健康與就醫歷程", page_icon="🩺", layout="centered"
-]
+)
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
