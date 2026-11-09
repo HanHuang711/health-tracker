@@ -30,7 +30,7 @@ def load_data():
 
     client = gspread.authorize(creds)
     # 替換成你的 Google 試算表名稱
-    sheet = client.open("我的健康與就醫紀錄").sheet1
+    sheet = client.open("我的健康與就醫紀錄").worksheet("驗血數據")
     data = sheet.get_all_records()
     df = pd.DataFrame(data)
 
