@@ -62,7 +62,7 @@ with tab1:
       selected_item = st.selectbox("選擇要檢視的血液指標", items)
 
       item_df = blood_df[blood_df["項目"] == selected_item].sort_values(
-          "日期"
+          "項目"
       )
 
       if not item_df.empty:
