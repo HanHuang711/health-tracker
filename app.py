@@ -8,7 +8,7 @@ from google.oauth2.service_account import Credentials
 # 頁面基本設定
 st.set_page_config(
     page_title="個人健康與就醫歷程", page_icon="🩺", layout="centered"
-)
+]
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -69,11 +69,9 @@ with tab1:
         fig = go.Figure()
 
         # -------------------------------------------------------------
-        # 🎨 顏色設定區：在這裡自由替換你想要的顏色色碼或名稱！
+        # 🎨 顏色設定區：在這裡自由替換你想要的顏色！
         # -------------------------------------------------------------
-        CHEMO_COLOR = (
-            "#8A2BE2"  # 化療虛線顏色 (例如: #8A2BE2 紫羅蘭色、#E63946 鮮紅色)
-        )
+        CHEMO_COLOR = "#8A2BE2"  # 化療垂直虛線顏色 (例如紫羅蘭色 #8A2BE2)
 
         category_colors = {
             "看診": "#1F77B4",  # 藍色
@@ -133,10 +131,81 @@ with tab1:
                 line_width=0,
             )
 
-        # 3. 🟣 化療事件：垂直虛線 + 懸停互動 (隱藏上方固定文字標籤)
+        # 3. 🟣 化療事件：使用 add_vline 畫出穩定可靠的垂直虛線
         if not event_df.empty:
-          y_min = item_df["數值"].min()
-          y_max = item_df["數值"].max()
-          y_mid = (y_min + y_max) / 2
+          chemo_df = event_df[event_df["類別"] == "化療"]
+          other_events_df = event_df[event_df["類別"] != "化療"]
 
-          chemo_df = event_df
+          # 畫出化療垂直虛線
+          for _, chemo in chemo_df.iterrows():
+            c_date = chemo["日期"]
+            fig.add_vline(
+                x=c_date, line_width=2, line_dash="dash", line_color=CHEMO_COLOR
+            )
+
+          # 為了讓圖例 (Legend) 出現化療選項，我們加一個隱藏或圖例專用的點
+          if not chemo_df.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=[chemo_df.iloc[0]["日期"]],
+                    y=[item_df["數值"].iloc[0]],
+                    mode="markers",
+                    name="🟣 化療紀錄",
+                    marker=dict(size=0, color=CHEMO_COLOR),  # 點設為透明
+                    hoverinfo="skip",
+                )
+            )
+
+          # 4. 其他事件（看診/用藥/其他）：互動圖示呈現
+          category_icons = {
+              "看診": "🔵 看診紀錄",
+              "用藥": "🟢 用藥紀錄",
+              "其他": "🚩 特殊事件",
+          }
+
+          y_mid = (
+              item_df["數值"].min() + item_df["數值"].max()
+          ) / 2 if len(item_df) > 0 else 0
+
+          for cat, group in other_events_df.groupby("類別"):
+            name_label = category_icons.get(cat, f"📌 {cat}")
+            color = category_colors.get(cat, "gray")
+
+            fig.add_trace(
+                go.Scatter(
+                    x=group["日期"],
+                    y=[y_mid] * len(group),
+                    mode="markers",
+                    name=name_label,
+                    marker=dict(size=12, symbol="diamond", color=color),
+                    hovertemplate=(
+                        "<b>【%{customdata[0]}】</b><br>"
+                        "<b>日期</b>: %{x}<br>"
+                        "<b>項目</b>: %{customdata[1]}<br>"
+                        "<b>醫院/診所</b>: %{customdata[2]}<br>"
+                        "<b>備註</b>: %{customdata[3]}<extra></extra>"
+                    ),
+                    customdata=group[
+                        ["類別", "項目", "醫院診所", "備註"]
+                    ].values,
+                )
+            )
+
+        fig.update_layout(
+            title=f"{selected_item} 歷史變化與事件對照圖",
+            xaxis_title="日期",
+            yaxis_title="數值",
+            hovermode="closest",
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+            ),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("歷史明細")
+        st.dataframe(
+            item_df[
+                ["日期", "數值", "單位", "參考範圍", "醫院診所", "備註"]
+            ],
+            use_container_width=True,
+        )
