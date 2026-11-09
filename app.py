@@ -46,7 +46,7 @@ sheet, df = load_data()
 st.title("🩺 健康與就醫歷程")
 
 # 分頁籤設計
-tab1, tab2, tab3 = st.tabs(["📊 數據趨勢", "📋 完整歷程", "➕ 新增紀錄"])
+tab1, tab2, tab3 = st.tabs(["📊 數據趨勢", "📋 在線編輯與歷程", "➕ 新增紀錄"])
 
 # Tab 1: 驗血數據趨勢圖
 with tab1:
@@ -114,7 +114,7 @@ with tab1:
             )
         )
 
-        # 2. 🏥 多筆入院到出院背景淡色區塊（依時間先後順序獨立配對）
+        # 2. 🏥 多筆入院到出院背景淡色區塊
         if not event_df.empty:
           sorted_events = event_df.sort_values("日期")
           admit_records = sorted_events[
@@ -147,7 +147,7 @@ with tab1:
                 line_width=0,
             )
 
-        # 3. 🟣 化療事件：使用互動線段，保持乾淨虛線外觀並支援滑鼠懸停看詳情
+        # 3. 🟣 化療事件：互動線段支援滑鼠懸停
         if not event_df.empty:
           chemo_df = event_df[event_df["類別"] == "化療"]
           other_events_df = event_df[event_df["類別"] != "化療"]
@@ -165,7 +165,7 @@ with tab1:
                     y=[y_min * 0.8, y_max * 1.2],
                     mode="lines",
                     name="化療紀錄",
-                    showlegend=first_chemo,  # 圖例只顯示一次
+                    showlegend=first_chemo,
                     line=dict(color=CHEMO_COLOR, width=2, dash="dash"),
                     hovertemplate=(
                         "<b>【化療紀錄】</b><br>"
@@ -178,16 +178,14 @@ with tab1:
             )
             first_chemo = False
 
-          # 4. 其他事件（方案 B）：同類別同日期自動合併，不同類別保持獨立圖示與顏色
+          # 4. 其他事件（方案 B 合併技術）
           for cat, group in other_events_df.groupby("類別"):
-            # 排除純「入院」與「出院」項目標記
             filtered_group = group[
                 ~group["項目"].str.contains("入院|出院", na=False)
             ]
             if filtered_group.empty:
               continue
 
-            # 按「日期」將同類別的多筆事件合併成一個顯示點
             aggregated_records = []
             for date_key, date_subgroup in filtered_group.groupby("日期"):
               items_list = []
@@ -260,15 +258,43 @@ with tab1:
   else:
     st.warning("目前試算表中沒有資料。")
 
-# Tab 2: 完整歷史清單
+# Tab 2: 📱 在線雙擊編輯與完整歷程 (可直接在表格上修改)
 with tab2:
-  st.header("就醫與檢驗完整歷程")
+  st.header("📋 線上數據編輯與總覽")
+  st.caption("💡 提示：你可以直接雙擊下方表格儲存格修改文字，編輯完後點擊最下方按鈕即可同步至 Google 雲端！")
+
   if not df.empty:
-    category_filter = st.multiselect(
-        "篩選類別", options=df["類別"].unique(), default=df["類別"].unique()
+    # 格式化日期顯示以利編輯
+    edit_df = df.copy()
+    if "日期" in edit_df.columns:
+      edit_df["日期"] = edit_df["日期"].dt.strftime("%Y-%m-%d")
+
+    # 可互動編輯的表格元件
+    edited_df = st.data_editor(
+        edit_df,
+        use_container_width=True,
+        num_rows="dynamic",  # 允許使用者直接在表格最下方新增/刪除資料列
+        key="health_data_editor",
     )
-    filtered_df = df[df["類別"].isin(category_filter)]
-    st.dataframe(filtered_df, use_container_width=True)
+
+    # 儲存按鈕
+    if st.button("💾 儲存所有修改至 Google 試算表", type="primary"):
+      if sheet is not None:
+        try:
+          # 將空值 nan 轉為空字串，防止寫入 Google 試算表時出錯
+          updated_data = edited_df.fillna("").astype(str).values.tolist()
+
+          # 清空試算表並重新覆寫標題與內容
+          sheet.clear()
+          header = list(edited_df.columns)
+          sheet.update([header] + updated_data)
+
+          st.success("✅ 修改成功！所有資料已更新至 Google 試算表。")
+          st.rerun()  # 刷新頁面重新讀取最新數據
+        except Exception as e:
+          st.error(f"❌ 寫入雲端失敗：{e}")
+      else:
+        st.error("連線至 Google 試算表失敗，無法儲存。")
   else:
     st.info("目前試算表中沒有資料。")
 
