@@ -204,7 +204,7 @@ with tab3:
     val_val = st.text_input("數值 (驗血才需填寫，無則留空)")
     unit_val = st.text_input("單位 (如: mg/dL)")
     ref_val = st.text_input("參考範圍 (如: 70-99)")
-    hosp_val = st.text_input("醫院 / 診所")
+    hosp_val = st.text_input("醫院 / 診所",value="林口長庚")
     note_val = st.text_area("醫師囑咐 / 備註")
 
     submitted = st.form_submit_button("寫入 Google 試算表")
