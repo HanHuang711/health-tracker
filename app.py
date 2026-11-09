@@ -164,16 +164,24 @@ with tab1:
             )
             first_chemo = False
 
-          # 4. 其他事件（看診、用藥、其他）：對應各自的圖示與顏色
+          # 4. 其他事件（看診/用藥/其他）：排除「入院」與「出院」，其餘正常顯示互動圖示
           for cat, group in other_events_df.groupby("類別"):
+            # 濾掉項目中包含「入院」或「出院」的紀錄，不顯示互動標示
+            filtered_group = group[
+                ~group["項目"].str.contains("入院|出院", na=False)
+            ]
+
+            if filtered_group.empty:
+              continue
+
             style = category_styles.get(
                 cat, {"color": "gray", "symbol": "diamond", "label": f"📌 {cat}"}
             )
 
             fig.add_trace(
                 go.Scatter(
-                    x=group["日期"],
-                    y=[y_mid] * len(group),
+                    x=filtered_group["日期"],
+                    y=[y_mid] * len(filtered_group),
                     mode="markers",
                     name=style["label"],
                     marker=dict(
@@ -186,12 +194,11 @@ with tab1:
                         "<b>醫院/診所</b>: %{customdata[2]}<br>"
                         "<b>備註</b>: %{customdata[3]}<extra></extra>"
                     ),
-                    customdata=group[
+                    customdata=filtered_group[
                         ["類別", "項目", "醫院診所", "備註"]
                     ].values,
                 )
             )
-
         fig.update_layout(
             title=f"{selected_item} 歷史變化與事件對照圖",
             xaxis_title="日期",
