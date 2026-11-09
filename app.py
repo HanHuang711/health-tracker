@@ -1,10 +1,11 @@
 import gspread
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
-# 頁面基本設定（適合手機瀏覽）
+# 頁面基本設定
 st.set_page_config(
     page_title="個人健康與就醫歷程", page_icon="🩺", layout="centered"
 )
@@ -33,7 +34,6 @@ def load_data():
     df = pd.DataFrame(data)
 
     if not df.empty and "日期" in df.columns:
-      # 使用 format="mixed" 容許試算表中同時存在不同格式的日期
       df["日期"] = pd.to_datetime(df["日期"], format="mixed", errors="coerce")
       df = df.sort_values("日期", ascending=False)
     return sheet, df
@@ -46,7 +46,6 @@ sheet, df = load_data()
 
 st.title("🩺 健康與就醫歷程")
 
-# 分頁籤設計
 tab1, tab2, tab3 = st.tabs(["📊 數據趨勢", "📋 完整歷程", "➕ 新增紀錄"])
 
 # Tab 1: 驗血數據趨勢圖
@@ -54,8 +53,7 @@ with tab1:
   st.header("驗血數據趨勢")
   if not df.empty:
     blood_df = df[df["類別"] == "驗血"].copy()
-    # 抓取非驗血的「重大事件」（如：入院、看診、化療、其他紀錄）
-    event_df = df[df["類別"] != "驗血"].copy()
+    event_df = df[df["類別"] != "驗血"].sort_values("日期").copy()
 
     if not blood_df.empty:
       blood_df["數值"] = pd.to_numeric(blood_df["數值"], errors="coerce")
@@ -68,51 +66,105 @@ with tab1:
       )
 
       if not item_df.empty:
-        # 使用 Plotly 繪製互動式趨勢圖
-        fig = px.line(
-            item_df,
-            x="日期",
-            y="數值",
-            markers=True,
-            title=f"{selected_item} 歷史變化曲線",
-            text="數值",
-            hover_data=["單位", "參考範圍", "醫院診所", "備註"],
+        # 使用 Plotly Graph Objects 打造高度客製化的互動圖表
+        fig = go.Figure()
+
+        # 1. 繪製驗血數值折線圖
+        fig.add_trace(
+            go.Scatter(
+                x=item_df["日期"],
+                y=item_df["數值"],
+                mode="lines+markers+text",
+                name=selected_item,
+                text=item_df["數值"],
+                textposition="top center",
+                hovertemplate=(
+                    "<b>日期</b>: %{x}<br>"
+                    "<b>數值</b>: %{y}<br>"
+                    "<b>單位</b>: %{customdata[0]}<br>"
+                    "<b>參考範圍</b>: %{customdata[1]}<br>"
+                    "<b>醫院診所</b>: %{customdata[2]}<br>"
+                    "<b>備註</b>: %{customdata[3]}<extra></extra>"
+                ),
+                customdata=item_df[
+                    ["單位", "參考範圍", "醫院診所", "備註"]
+                ].values,
+            )
         )
-        fig.update_traces(textposition="top center")
 
-        # -------------------------------------------------------------
-        # 🎯 核心重點：標示「入院 / 化療 / 其他事件」垂直線與標籤
-        # -------------------------------------------------------------
+        # 2. 🏥 處理入院到出院的背景區段 (淡紅色區間)
         if not event_df.empty:
-          for _, event in event_df.iterrows():
-            event_date = event["日期"]
-            event_title = f"{event['類別']}: {event['項目']}"
-            if pd.notnull(event["備註"]) and str(event["備註"]).strip() != "":
-              event_title += f" ({event['備註']})"
+          admit_records = event_df[
+              event_df["項目"].str.contains("入院", na=False)
+          ]
+          discharge_records = event_df[
+              event_df["項目"].str.contains("出院", na=False)
+          ]
 
-            # 在圖表上加上垂直虛線
-            fig.add_vline(
-                x=event_date,
-                line_width=1.5,
-                line_dash="dash",
-                line_color="red",
+          for _, admit in admit_records.iterrows():
+            admit_date = admit["日期"]
+            matching_discharge = discharge_records[
+                discharge_records["日期"] >= admit_date
+            ]
+            discharge_date = (
+                matching_discharge.iloc[0]["日期"]
+                if not matching_discharge.empty
+                else admit_date + pd.Timedelta(days=5)
             )
 
-            # 在垂直線上加上文字說明
-            fig.add_annotation(
-                x=event_date,
-                y=1.02,
-                yref="paper",
-                text=f"🚩 {event_title}",
-                showarrow=False,
-                font=dict(color="red", size=11),
-                textangle=-30,
+            fig.add_vrect(
+                x0=admit_date,
+                x1=discharge_date,
+                fillcolor="lightcoral",
+                opacity=0.15,
+                layer="below",
+                line_width=0,
+            )
+
+        # 3. 🎯 處理特殊事件（滑鼠懸停 Hover 才顯示細節）
+        if not event_df.empty:
+          # 計算事件呈現的 Y 軸高度（放在圖表中間垂直高度）
+          y_mid = (item_df["數值"].min() + item_df["數值"].max()) / 2
+
+          # 依據類別分別建立懸停圖示
+          category_icons = {
+              "化療": "🟣 化療事件",
+              "看診": "🔵 看診紀錄",
+              "用藥": "🟢 用藥紀錄",
+              "其他": "🚩 特殊事件",
+          }
+
+          for cat, group in event_df.groupby("類別"):
+            name_label = category_icons.get(cat, f"📌 {cat}")
+
+            fig.add_trace(
+                go.Scatter(
+                    x=group["日期"],
+                    y=[y_mid] * len(group),
+                    mode="markers",
+                    name=name_label,
+                    marker=dict(size=12, symbol="diamond"),
+                    hovertemplate=(
+                        "<b>【%{customdata[0]}】</b><br>"
+                        "<b>日期</b>: %{x}<br>"
+                        "<b>項目</b>: %{customdata[1]}<br>"
+                        "<b>醫院/診所</b>: %{customdata[2]}<br>"
+                        "<b>備註</b>: %{customdata[3]}<extra></extra>"
+                    ),
+                    customdata=group[
+                        ["類別", "項目", "醫院診所", "備註"]
+                    ].values,
+                )
             )
 
         fig.update_layout(
+            title=f"{selected_item} 歷史變化與事件對照圖",
             xaxis_title="日期",
             yaxis_title="數值",
-            margin=dict(t=60),  # 預留上方空間放置事件標籤
+            hovermode="closest",
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+            ),
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -148,7 +200,7 @@ with tab3:
   with st.form("add_data_form", clear_on_submit=True):
     date_val = st.date_input("日期")
     cat_val = st.selectbox("類別", ["驗血", "看診", "用藥", "化療", "其他"])
-    item_val = st.text_input("項目 (如: 飯前血糖, 入院, 第X次化療)")
+    item_val = st.text_input("項目 (如: 入院, 出院, 第1次化療, 門診追蹤)")
     val_val = st.text_input("數值 (驗血才需填寫，無則留空)")
     unit_val = st.text_input("單位 (如: mg/dL)")
     ref_val = st.text_input("參考範圍 (如: 70-99)")
@@ -170,6 +222,6 @@ with tab3:
             note_val,
         ]
         sheet.append_row(new_row)
-        st.success("成功新增資料！請刷新頁面查看最新數據與事件標籤。")
+        st.success("成功新增資料！請刷新頁面查看最新互動圖表。")
       else:
         st.error("連線至 Google 試算表失敗，無法寫入。")
