@@ -99,7 +99,6 @@ with tab1:
         if "數值異常" not in item_df.columns:
           item_df["數值異常"] = ""
 
-        # 動態決定每個數據點的顏色：如果有填寫 H/L 等異常標記，則顯示紅色，否則正常
         point_colors = []
         for _, row in item_df.iterrows():
           val_abnormal = row.get("數值異常", "")
@@ -108,7 +107,7 @@ with tab1:
           else:
             point_colors.append(NORMAL_POINT_COLOR)
 
-        # 1. 繪製驗血數據折線（支援異常點變紅）
+        # 1. 繪製驗血數據折線
         fig.add_trace(
             go.Scatter(
                 x=item_df["日期"],
@@ -117,10 +116,10 @@ with tab1:
                 name=selected_item,
                 text=item_df["數值"],
                 textposition="top center",
-                line=dict(color="#1F77B4", width=2),  # 折線本身維持沉穩的藍色
+                line=dict(color="#1F77B4", width=2),
                 marker=dict(
                     size=10, color=point_colors
-                ),  # 依據異常狀況動態變色
+                ),
                 hovertemplate=(
                     "<b>日期</b>: %{x|%Y-%m-%d}<br>"
                     "<b>數值</b>: %{y}<br>"
@@ -169,7 +168,7 @@ with tab1:
                 line_width=0,
             )
 
-        # 3. 🟣 化療事件：互動線段支援滑鼠懸停
+        # 3. 🟣 化療事件
         if not event_df.empty:
           chemo_df = event_df[event_df["類別"] == "化療"]
           other_events_df = event_df[event_df["類別"] != "化療"]
@@ -280,7 +279,7 @@ with tab1:
   else:
     st.warning("目前試算表中沒有資料。")
 
-# Tab 2: 📱 在線雙擊編輯與完整歷程 (可直接在表格上修改)
+# Tab 2: 📱 在線雙擊編輯與完整歷程
 with tab2:
   st.header("📋 線上數據編輯與總覽")
   st.caption("💡 提示：你可以直接雙擊下方表格儲存格修改文字，編輯完後點擊最下方按鈕即可同步至 Google 雲端！")
@@ -317,22 +316,24 @@ with tab2:
 with tab3:
   st.header("新增筆記 / 紀錄")
   
-  # 事先取得現有的血檢項目清單（供驗血下拉選單使用）
+  # 1. 類別選擇移到表單外，這樣一選擇就會即時觸發畫面更新
+  cat_val = st.selectbox("類別", ["驗血", "看診", "用藥", "化療", "其他"])
+
+  # 取得現有的血檢項目清單
   existing_blood_items = []
-  if not df.empty and "類_別" in df.columns or "類別" in df.columns:
+  if not df.empty and "類別" in df.columns:
     b_df = df[df["類別"] == "驗血"]
     if not b_df.empty:
       existing_blood_items = sorted(b_df["項目"].dropna().unique().astype(str))
 
   with st.form("add_data_form", clear_on_submit=True):
     date_val = st.date_input("日期")
-    cat_val = st.selectbox("類別", ["驗血", "看診", "用藥", "化療", "其他"])
     
-    # 根據類別動態切換：若選擇「驗血」且已有歷史項目，則顯示下拉選單；否則維持文字輸入框
+    # 2. 根據上方選好的類別，動態切換項目欄位
     if cat_val == "驗血" and existing_blood_items:
-      item_val = st.selectbox("項目 (請選擇驗血指標)", existing_blood_items)
+      item_val = st.selectbox("項目 (選擇驗血指標)", existing_blood_items)
     else:
-      item_val = st.text_input("項目 (如: 入院, 出院, 第1次化療, 門診追蹤)")
+      item_val = st.text_input("項目 (如: 入院, 出院, 第1次化療, 門診追蹤, 直腸科)")
 
     val_val = st.text_input("數值 (驗血才需填寫，無則留空)")
     unit_val = st.text_input("單位 (如: mg/dL)")
