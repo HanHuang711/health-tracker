@@ -74,7 +74,7 @@ with tab1:
         # 🎨 顏色與圖示統一設定
         # -------------------------------------------------------------
         CHEMO_COLOR = "#c8c8c8"  # 化療垂直虛線顏色
-        NORMAL_POINT_COLOR = "#1F77B4"  # 正常驗血點顏色
+        NORMAL_POINT_COLOR = "#64dcf0"  # 正常驗血點顏色
         ABNORMAL_POINT_COLOR = "#FF4B4B"  # 異常驗血點顏色 (紅色)
 
         category_styles = {
@@ -246,7 +246,7 @@ with tab1:
                     hovertemplate=(
                         "<b>【%{customdata[0]}】</b><br>"
                         "<b>日期</b>: %{x|%Y-%m-%d}<br>"
-                        "<b>醫院/診所</b>: {customdata[2]}<br>"
+                        "<b>醫院/診所</b>: %{customdata[2]}<br>"
                         "<b>當日項目</b>:<br>• %{customdata[1]}<extra></extra>"
                     ),
                     customdata=agg_df[
@@ -316,13 +316,28 @@ with tab2:
 # Tab 3: 新增筆記 / 紀錄
 with tab3:
   st.header("新增筆記 / 紀錄")
+  
+  # 事先取得現有的血檢項目清單（供驗血下拉選單使用）
+  existing_blood_items = []
+  if not df.empty and "類_別" in df.columns or "類別" in df.columns:
+    b_df = df[df["類別"] == "驗血"]
+    if not b_df.empty:
+      existing_blood_items = sorted(b_df["項目"].dropna().unique().astype(str))
+
   with st.form("add_data_form", clear_on_submit=True):
     date_val = st.date_input("日期")
     cat_val = st.selectbox("類別", ["驗血", "看診", "用藥", "化療", "其他"])
-    item_val = st.text_input("項目 (如: 入院, 出院, 第1次化療, 門診追蹤)")
+    
+    # 根據類別動態切換：若選擇「驗血」且已有歷史項目，則顯示下拉選單；否則維持文字輸入框
+    if cat_val == "驗血" and existing_blood_items:
+      item_val = st.selectbox("項目 (請選擇驗血指標)", existing_blood_items)
+    else:
+      item_val = st.text_input("項目 (如: 入院, 出院, 第1次化療, 門診追蹤)")
+
     val_val = st.text_input("數值 (驗血才需填寫，無則留空)")
     unit_val = st.text_input("單位 (如: mg/dL)")
     ref_val = st.text_input("參考範圍 (如: 70-99)")
+    abnormal_val = st.text_input("數值異常標記 (如: H 或 L，正常則留空)")
     hosp_val = st.text_input("醫院 / 診所", value="林口長庚")
     note_val = st.text_area("醫師囑咐 / 備註")
 
@@ -339,6 +354,7 @@ with tab3:
             ref_val,
             hosp_val,
             note_val,
+            abnormal_val,
         ]
         sheet.append_row(new_row)
         st.success("成功新增資料！請刷新頁面查看最新互動圖表。")
