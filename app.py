@@ -1,4 +1,7 @@
+import base64
+import json
 import gspread
+import openai
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -57,7 +60,6 @@ def load_qa_data():
     try:
       qa_sheet = client.open("我的健康與就醫紀錄").worksheet("看診問答")
     except Exception:
-      # 如果找不到「看診問答」分頁，自動建立一個新分頁
       qa_sheet = client.open("我的健康與就醫紀錄").add_worksheet(
           title="看診問答", rows=100, cols=4
       )
@@ -78,12 +80,66 @@ def load_qa_data():
     return None, pd.DataFrame()
 
 
+# 🎙️ AI 語音檔辨識與問答摘要分析函數
+def analyze_audio_consultation(audio_file_bytes, file_name):
+  api_key = st.secrets.get("OPENAI_API_KEY", "")
+  if not api_key:
+    st.error("未設定 OPENAI_API_KEY，無法使用語音辨識功能。")
+    return None
+
+  client = openai.OpenAI(api_key=api_key)
+
+  try:
+    # 1. 使用 Whisper API 進行語音轉文字
+    with st.spinner("1/2 正在透過 AI 將看診語音轉為文字中..."):
+      # OpenAI 需要檔案物件，建立一個具備 name 屬性的臨時檔案或使用 tuple
+      audio_file = (file_name, audio_file_bytes)
+      transcript = client.audio.transcriptions.create(
+          model="whisper-1", file=audio_file
+      )
+      transcript_text = transcript.text
+
+    # 2. 使用 GPT 萃取結構化的問答與摘要
+    with st.spinner("2/2 AI 正在分析對話內容並萃取醫師交代重點..."):
+      prompt = f"""
+            以下是一段醫療看診時的對話逐字稿。請幫我分析並萃取重點，整理成嚴格的 JSON 格式（不要有任何 markdown 標記）：
+            {{
+                "整體摘要": "這次看診的核心摘要與注意事項（一句話總結）",
+                "問答清單": [
+                    {{
+                        "問題": "病患或家屬詢問的問題（若對話中未明確提及，可根據情境整理）",
+                        "醫生回答與備註": "醫師給出的指示、藥物調整或衛教交代"
+                    }}
+                ]
+            }}
+
+            逐字稿內容：
+            {transcript_text}
+            """
+
+      response = client.chat.completions.create(
+          model="gpt-4o-mini",
+          messages=[{"role": "user", "content": prompt}],
+      )
+
+      result_text = response.choices[0].message.content.strip()
+      if result_text.startswith("```"):
+        result_text = (
+            result_text.replace("```json", "").replace("```", "").strip()
+        )
+
+      return json.loads(result_text), transcript_text
+  except Exception as e:
+    st.error(f"語音分析失敗：{e}")
+    return None, None
+
+
 sheet, df = load_data()
 qa_sheet, qa_df = load_qa_data()
 
 st.title("🩺 身體的功課")
 
-# 分頁籤設計 (新增了「💬 看診問答」)
+# 分頁籤設計
 tab1, tab2, tab3, tab4 = st.tabs(
     ["📊 數據趨勢", "📋 在線編輯與歷程", "➕ 新增紀錄", "💬 看診問答"]
 )
@@ -308,7 +364,10 @@ with tab1:
 # Tab 2: 📱 在線雙擊編輯與完整歷程
 with tab2:
   st.header("📋 線上數據編輯與總覽")
-  st.caption("💡 提示：你可以直接雙擊下方表格儲存格修改文字，編輯完後點擊最下方按鈕即可同步至 Google 雲端！")
+  st.caption(
+      "💡 提示：你可以直接雙擊下方表格儲存格修改文字，編輯完後點擊最下方按鈕即可同步至"
+      " Google 雲端！"
+  )
 
   if not df.empty:
     edit_df = df.copy()
@@ -390,20 +449,89 @@ with tab3:
       else:
         st.error("連線至 Google 試算表失敗，無法寫入。")
 
-# Tab 4: 💬 看診問答專區
+# Tab 4: 💬 看診問答專區（包含錄音檔 AI 摘要）
 with tab4:
   st.header("💬 下次看診問題與醫生回答記錄")
-  st.caption(
-      "💡 這裡可以記錄下次看診想問醫生的問題清單；看診後也可以直接在下方表格填入醫生的回答與備註！"
-  )
 
-  # 1. 新增想問的問題表單
+  # 🎙️ 上傳看診錄音檔自動分析區塊
+  with st.expander("🎙️ 上傳看診錄音檔（AI 自動轉文字並萃取問答）", expanded=False):
+    st.caption(
+        "看完診後，可直接上傳手機錄音檔（支援 mp3, m4a, wav），AI"
+        " 會自動幫忙整理成問答清單！"
+    )
+    audio_file_uploaded = st.file_uploader(
+        "選擇看診錄音檔", type=["mp3", "m4a", "wav", "ogg", "webm"]
+    )
+
+    if audio_file_uploaded is not None:
+      st.audio(audio_file_uploaded)
+      if st.button("🤖 開始分析錄音檔並整理問答"):
+        parsed_result, raw_transcript = analyze_audio_consultation(
+            audio_file_uploaded.getvalue(), audio_file_uploaded.name
+        )
+        if parsed_result:
+          st.session_state["ai_audio_qa"] = parsed_result
+          st.session_state["raw_transcript"] = raw_transcript
+          st.success("✅ 錄音分析成功！請往下查看整理結果。")
+
+    # 如果有分析結果，提供一鍵寫入選項
+    if "ai_audio_qa" in st.session_state:
+      st.info(
+          f"💡 **AI 整體摘要**：{st.session_state['ai_audio_qa'].get('整體摘要', '')}"
+      )
+      st.write("👇 **萃取出的問答清單（點擊下方按鈕可批量寫入問題庫）**：")
+
+      for i, qa_item in enumerate(
+          st.session_state["ai_audio_qa"].get("問答清單", [])
+      ):
+        st.text_input(
+            f"Q{i+1}",
+            value=qa_item.get("問題", ""),
+            key=f"ai_q_{i}",
+            disabled=True,
+        )
+        st.text_input(
+            f"A{i+1}",
+            value=qa_item.get("醫生回答與備註", ""),
+            key=f"ai_a_{i}",
+            disabled=True,
+        )
+
+      if st.button("📥 將上述 AI 整理的問答全部寫入 Google 試算表"):
+        if qa_sheet is not None:
+          try:
+            import datetime
+
+            today_str = str(datetime.date.today())
+            rows_to_add = []
+            for qa_item in st.session_state["ai_audio_qa"].get(
+                "問答清單", []
+            ):
+              rows_to_add.append([
+                  today_str,
+                  qa_item.get("問題", ""),
+                  qa_item.get("醫生回答與備註", ""),
+                  "已詢問",
+              ])
+            qa_sheet.append_rows(rows_to_add)
+            st.success("🎉 成功將 AI 整理的問答寫入雲端！")
+            del st.session_state["ai_audio_qa"]  # 清除暫存
+            st.rerun()
+          except Exception as e:
+            st.error(f"寫入失敗：{e}")
+
+      with st.expander("查看原始語音逐字稿"):
+        st.write(st.session_state.get("raw_transcript", ""))
+
+  st.divider()
+
+  # 1. 手動新增想問的問題表單
   with st.form("add_qa_form", clear_on_submit=True):
-    st.subheader("📝 新增要詢問的問題")
+    st.subheader("📝 手動新增要詢問的問題")
     import datetime
 
     qa_date_val = st.date_input("預定看診日期", value=datetime.date.today())
-    question_val = st.text_area("想詢問的問題 (例如：最近容易疲倦正常嗎？藥物劑量需要調整嗎？)")
+    question_val = st.text_area("想詢問的問題 (例如：最近容易疲倦正常嗎？)")
     status_val = st.selectbox("狀態", ["待詢問", "已詢問"])
 
     qa_submitted = st.form_submit_button("新增到問題清單")
@@ -455,6 +583,4 @@ with tab4:
       else:
         st.error("無法連線至 Google 試算表。")
   else:
-    st.info(
-        "目前尚無看診問答紀錄，趕快使用上方表單新增第一個想問醫生的問題吧！"
-    )
+    st.info("目前尚無看診問答紀錄，可以手動新增或上傳錄音檔讓 AI 自動整理！")
