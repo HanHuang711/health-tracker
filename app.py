@@ -84,7 +84,7 @@ def load_qa_data():
     return None, pd.DataFrame()
 
 
-# 🎙️ 使用新版 Google GenAI SDK 分析看診音檔摘要（含自動降級備援機制）
+# 🎙️ 優化版：直接使用 gemini-2.0-flash 進行高效語音分析
 def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
   api_key = st.secrets.get("GEMINI_API_KEY", "")
   if not api_key:
@@ -93,31 +93,25 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
 
   tmp_path = None
   try:
-    with st.status(
-        "🤖 正在上傳與處理音檔，請稍候...", expanded=True
-    ) as status:
-      # 初始化新版 Client
+    with st.spinner("🤖 正在上傳音檔並請 Gemini 快速萃取看診重點中..."):
       client = genai.Client(api_key=api_key)
 
-      # 建立臨時檔案儲存上傳的音訊
-      st.write("📁 正在準備音訊暫存檔...")
+      # 建立臨時檔案
       suffix = "." + file_name.split(".")[-1] if "." in file_name else ".mp3"
       with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(audio_file_bytes)
         tmp_path = tmp.name
 
-      # 使用新版 Files API 上傳音檔
-      st.write("☁️ 正在將音檔上傳至 Google 雲端...")
+      # 上傳音檔
       audio_file = client.files.upload(file=tmp_path)
 
-      # ⏳ 等待 Google 伺服器把音檔處理完畢 (ACTIVE 狀態)
-      st.write("🎧 等待 Google 雲端轉碼與聆聽音訊內容...")
+      # 簡化轉碼等待機制（最多等 30 秒）
       wait_seconds = 0
       while getattr(audio_file.state, "name", "") == "PROCESSING":
-        if wait_seconds >= 120:
-          raise TimeoutError("雲端音訊處理超時（超過 2 分鐘），請稍後再試。")
-        time.sleep(3)
-        wait_seconds += 3
+        if wait_seconds >= 30:
+          raise TimeoutError("雲端音訊轉碼逾時。")
+        time.sleep(2)
+        wait_seconds += 2
         audio_file = client.files.get(name=audio_file.name)
 
       if getattr(audio_file.state, "name", "") == "FAILED":
@@ -136,51 +130,16 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
             }
             """
 
-      # 🔄 模型優先順序清單（使用新版 SDK 支援的最新模型）
-      models_to_try = ["gemini-3.8-flash", "gemini-2.0-flash"]
-      response = None
-      used_model = None
-      last_error = None
+      # 直接使用目前最穩定、速度最快的 gemini-2.0-flash
+      response = client.models.generate_content(
+          model="gemini-2.0-flash", contents=[audio_file, prompt]
+      )
 
-      for idx, model_name in enumerate(models_to_try):
-        try:
-          st.write(f"🧠 正在使用 **{model_name}** 萃取看診重點與問答清單...")
-          response = client.models.generate_content(
-              model=model_name, contents=[audio_file, prompt]
-          )
-          used_model = model_name
-          break  # 成功取得回應就跳出迴圈
-        except Exception as api_err:
-          last_error = api_err
-          err_str = str(api_err)
-          if (
-              any(code in err_str for code in ["503", "429", "404"])
-              and idx < len(models_to_try) - 1
-          ):
-            next_model = models_to_try[idx + 1]
-            st.write(
-                f"⚠️ {model_name} 目前伺服器壅擠或暫無法使用，自動切換至備用模型"
-                f" **{next_model}**..."
-            )
-            time.sleep(2)
-            continue
-          else:
-            raise api_err
-
-      if response is None:
-        raise last_error or RuntimeError("所有備用模型皆無法完成分析。")
-
-      # 刪除雲端暫存檔案
+      # 刪除雲端暫存檔
       try:
         client.files.delete(name=audio_file.name)
       except Exception:
         pass
-
-      status.update(
-          label=f"✅ 語音分析完成！（使用模型：{used_model}）",
-          state="complete",
-          expanded=False,
-      )
 
       result_text = response.text.strip()
       if result_text.startswith("```"):
@@ -189,12 +148,11 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
         )
 
       parsed_json = json.loads(result_text)
-      return parsed_json, f"（已透過 {used_model} 完成語音分析）"
+      return parsed_json, "（已透過 gemini-2.0-flash 完成語音分析）"
   except Exception as e:
     st.error(f"Gemini 語音分析失敗：{e}")
     return None, None
   finally:
-    # 清理本機暫存檔案
     if tmp_path and os.path.exists(tmp_path):
       try:
         os.remove(tmp_path)
