@@ -1,7 +1,7 @@
 import json
 import tempfile
+import google.genai as genai
 import gspread
-import google.generativeai as genai
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -80,30 +80,28 @@ def load_qa_data():
     return None, pd.DataFrame()
 
 
-# 🎙️ 使用 Google Gemini 分析看診音檔摘要
+# 🎙️ 使用新版 Google GenAI SDK 分析看診音檔摘要
 def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
-  api_key = st.secrets.get(
-      "GEMINI_API_KEY", st.secrets.get("GOOGLE_API_KEY", "")
-  )
+  api_key = st.secrets.get("GEMINI_API_KEY", "")
   if not api_key:
     st.error("未設定 GEMINI_API_KEY，無法使用 Gemini 語音辨識功能。")
     return None, None
 
-  genai.configure(api_key=api_key)
-
   try:
-    with st.spinner("🤖 Google Gemini 正在上傳並聆聽音檔、萃取看診重點中..."):
+    with st.spinner(
+        "🤖 Google Gemini (GenAI) 正在上傳並聆聽音檔、萃取看診重點中..."
+    ):
+      # 初始化新版 Client
+      client = genai.Client(api_key=api_key)
+
       # 建立臨時檔案儲存上傳的音訊
       suffix = "." + file_name.split(".")[-1] if "." in file_name else ".mp3"
       with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(audio_file_bytes)
         tmp_path = tmp.name
 
-      # 上傳檔案至 Gemini 檔案 API
-      audio_file = genai.upload_file(tmp_path)
-
-      # 使用支援多模態音訊的 Gemini 模型
-      model = genai.GenerativeModel("gemini-1.5-flash")
+      # 使用新版 Files API 上傳音檔
+      audio_file = client.files.upload(file=tmp_path)
 
       prompt = """
             請仔細聆聽這段醫療看診時的對話錄音，並幫我分析並萃取重點，整理成嚴格的 JSON 格式（不要包含任何 markdown 程式碼標記如 ```json）：
@@ -118,11 +116,14 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
             }
             """
 
-      response = model.generate_content([audio_file, prompt])
+      # 呼叫最新閃電模型 gemini-2.5-flash
+      response = client.models.generate_content(
+          model="gemini-2.5-flash", contents=[audio_file, prompt]
+      )
 
       # 刪除雲端暫存檔案
       try:
-        genai.delete_file(audio_file.name)
+        client.files.delete(name=audio_file.name)
       except:
         pass
 
@@ -133,7 +134,7 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
         )
 
       parsed_json = json.loads(result_text)
-      return parsed_json, "（已透過 Google Gemini 語音多模態分析完成摘要）"
+      return parsed_json, "（已透過最新 Google GenAI SDK 語音分析完成）"
   except Exception as e:
     st.error(f"Gemini 語音分析失敗：{e}")
     return None, None
