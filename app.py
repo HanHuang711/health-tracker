@@ -1,7 +1,7 @@
-import base64
 import json
+import tempfile
 import gspread
-import openai
+import google.generativeai as genai
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -80,57 +80,62 @@ def load_qa_data():
     return None, pd.DataFrame()
 
 
-# 🎙️ AI 語音檔辨識與問答摘要分析函數
-def analyze_audio_consultation(audio_file_bytes, file_name):
-  api_key = st.secrets.get("OPENAI_API_KEY", "")
+# 🎙️ 使用 Google Gemini 分析看診音檔摘要
+def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
+  api_key = st.secrets.get(
+      "GEMINI_API_KEY", st.secrets.get("GOOGLE_API_KEY", "")
+  )
   if not api_key:
-    st.error("未設定 OPENAI_API_KEY，無法使用語音辨識功能。")
-    return None
+    st.error("未設定 GEMINI_API_KEY，無法使用 Gemini 語音辨識功能。")
+    return None, None
 
-  client = openai.OpenAI(api_key=api_key)
+  genai.configure(api_key=api_key)
 
   try:
-    # 1. 使用 Whisper API 進行語音轉文字
-    with st.spinner("1/2 正在透過 AI 將看診語音轉為文字中..."):
-      # OpenAI 需要檔案物件，建立一個具備 name 屬性的臨時檔案或使用 tuple
-      audio_file = (file_name, audio_file_bytes)
-      transcript = client.audio.transcriptions.create(
-          model="whisper-1", file=audio_file
-      )
-      transcript_text = transcript.text
+    with st.spinner("🤖 Google Gemini 正在上傳並聆聽音檔、萃取看診重點中..."):
+      # 建立臨時檔案儲存上傳的音訊
+      suffix = "." + file_name.split(".")[-1] if "." in file_name else ".mp3"
+      with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(audio_file_bytes)
+        tmp_path = tmp.name
 
-    # 2. 使用 GPT 萃取結構化的問答與摘要
-    with st.spinner("2/2 AI 正在分析對話內容並萃取醫師交代重點..."):
-      prompt = f"""
-            以下是一段醫療看診時的對話逐字稿。請幫我分析並萃取重點，整理成嚴格的 JSON 格式（不要有任何 markdown 標記）：
-            {{
+      # 上傳檔案至 Gemini 檔案 API
+      audio_file = genai.upload_file(tmp_path)
+
+      # 使用支援多模態音訊的 Gemini 模型
+      model = genai.GenerativeModel("gemini-1.5-flash")
+
+      prompt = """
+            請仔細聆聽這段醫療看診時的對話錄音，並幫我分析並萃取重點，整理成嚴格的 JSON 格式（不要包含任何 markdown 程式碼標記如 ```json）：
+            {
                 "整體摘要": "這次看診的核心摘要與注意事項（一句話總結）",
                 "問答清單": [
-                    {{
+                    {
                         "問題": "病患或家屬詢問的問題（若對話中未明確提及，可根據情境整理）",
                         "醫生回答與備註": "醫師給出的指示、藥物調整或衛教交代"
-                    }}
+                    }
                 ]
-            }}
-
-            逐字稿內容：
-            {transcript_text}
+            }
             """
 
-      response = client.chat.completions.create(
-          model="gpt-4o-mini",
-          messages=[{"role": "user", "content": prompt}],
-      )
+      response = model.generate_content([audio_file, prompt])
 
-      result_text = response.choices[0].message.content.strip()
+      # 刪除雲端暫存檔案
+      try:
+        genai.delete_file(audio_file.name)
+      except:
+        pass
+
+      result_text = response.text.strip()
       if result_text.startswith("```"):
         result_text = (
             result_text.replace("```json", "").replace("```", "").strip()
         )
 
-      return json.loads(result_text), transcript_text
+      parsed_json = json.loads(result_text)
+      return parsed_json, "（已透過 Google Gemini 語音多模態分析完成摘要）"
   except Exception as e:
-    st.error(f"語音分析失敗：{e}")
+    st.error(f"Gemini 語音分析失敗：{e}")
     return None, None
 
 
@@ -449,15 +454,15 @@ with tab3:
       else:
         st.error("連線至 Google 試算表失敗，無法寫入。")
 
-# Tab 4: 💬 看診問答專區（包含錄音檔 AI 摘要）
+# Tab 4: 💬 看診問答專區（包含 Gemini 錄音檔 AI 摘要）
 with tab4:
   st.header("💬 下次看診問題與醫生回答記錄")
 
-  # 🎙️ 上傳看診錄音檔自動分析區塊
-  with st.expander("🎙️ 上傳看診錄音檔（AI 自動轉文字並萃取問答）", expanded=False):
+  # 🎙️ 上傳看診錄音檔自動分析區塊 (Gemini 驅動)
+  with st.expander("🎙️ 上傳看診錄音檔（Gemini AI 自動聆聽並萃取問答）", expanded=False):
     st.caption(
-        "看完診後，可直接上傳手機錄音檔（支援 mp3, m4a, wav），AI"
-        " 會自動幫忙整理成問答清單！"
+        "看完診後，可直接上傳手機錄音檔（支援 mp3, m4a, wav），Google Gemini"
+        " 會自動幫忙分析並整理成問答清單！"
     )
     audio_file_uploaded = st.file_uploader(
         "選擇看診錄音檔", type=["mp3", "m4a", "wav", "ogg", "webm"]
@@ -465,35 +470,35 @@ with tab4:
 
     if audio_file_uploaded is not None:
       st.audio(audio_file_uploaded)
-      if st.button("🤖 開始分析錄音檔並整理問答"):
-        parsed_result, raw_transcript = analyze_audio_consultation(
+      if st.button("🤖 開始用 Gemini 分析錄音檔"):
+        parsed_result, raw_info = analyze_audio_consultation_gemini(
             audio_file_uploaded.getvalue(), audio_file_uploaded.name
         )
         if parsed_result:
-          st.session_state["ai_audio_qa"] = parsed_result
-          st.session_state["raw_transcript"] = raw_transcript
-          st.success("✅ 錄音分析成功！請往下查看整理結果。")
+          st.session_state["gemini_audio_qa"] = parsed_result
+          st.session_state["gemini_raw_info"] = raw_info
+          st.success("✅ Gemini 語音分析成功！請往下查看整理結果。")
 
     # 如果有分析結果，提供一鍵寫入選項
-    if "ai_audio_qa" in st.session_state:
+    if "gemini_audio_qa" in st.session_state:
       st.info(
-          f"💡 **AI 整體摘要**：{st.session_state['ai_audio_qa'].get('整體摘要', '')}"
+          f"💡 **AI 整體摘要**：{st.session_state['gemini_audio_qa'].get('整體摘要', '')}"
       )
       st.write("👇 **萃取出的問答清單（點擊下方按鈕可批量寫入問題庫）**：")
 
       for i, qa_item in enumerate(
-          st.session_state["ai_audio_qa"].get("問答清單", [])
+          st.session_state["gemini_audio_qa"].get("問答清單", [])
       ):
         st.text_input(
             f"Q{i+1}",
             value=qa_item.get("問題", ""),
-            key=f"ai_q_{i}",
+            key=f"g_q_{i}",
             disabled=True,
         )
         st.text_input(
             f"A{i+1}",
             value=qa_item.get("醫生回答與備註", ""),
-            key=f"ai_a_{i}",
+            key=f"g_a_{i}",
             disabled=True,
         )
 
@@ -504,7 +509,7 @@ with tab4:
 
             today_str = str(datetime.date.today())
             rows_to_add = []
-            for qa_item in st.session_state["ai_audio_qa"].get(
+            for qa_item in st.session_state["gemini_audio_qa"].get(
                 "問答清單", []
             ):
               rows_to_add.append([
@@ -514,14 +519,14 @@ with tab4:
                   "已詢問",
               ])
             qa_sheet.append_rows(rows_to_add)
-            st.success("🎉 成功將 AI 整理的問答寫入雲端！")
-            del st.session_state["ai_audio_qa"]  # 清除暫存
+            st.success("🎉 成功將 Gemini 整理的問答寫入雲端！")
+            del st.session_state["gemini_audio_qa"]  # 清除暫存
             st.rerun()
           except Exception as e:
             st.error(f"寫入失敗：{e}")
 
-      with st.expander("查看原始語音逐字稿"):
-        st.write(st.session_state.get("raw_transcript", ""))
+      with st.expander("查看 AI 分析說明"):
+        st.write(st.session_state.get("gemini_raw_info", ""))
 
   st.divider()
 
@@ -583,4 +588,4 @@ with tab4:
       else:
         st.error("無法連線至 Google 試算表。")
   else:
-    st.info("目前尚無看診問答紀錄，可以手動新增或上傳錄音檔讓 AI 自動整理！")
+    st.info("目前尚無看診問答紀錄，可以手動新增或上傳錄音檔讓 Gemini 自動整理！")
