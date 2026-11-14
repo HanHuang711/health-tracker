@@ -80,11 +80,11 @@ def load_qa_data():
       )
       qa_df = qa_df.sort_values("預定看診日期", ascending=True)
     return qa_sheet, qa_df
-  except Exception as e:
+  except Exception:
     return None, pd.DataFrame()
 
 
-# 🎙️ 使用新版 Google GenAI SDK 分析看診音檔摘要（含檔案處理等待機制）
+# 🎙️ 使用新版 Google GenAI SDK 分析看診音檔摘要（含自動降級備援機制）
 def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
   api_key = st.secrets.get("GEMINI_API_KEY", "")
   if not api_key:
@@ -110,7 +110,7 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
       st.write("☁️ 正在將音檔上傳至 Google 雲端...")
       audio_file = client.files.upload(file=tmp_path)
 
-      # ⏳ 關鍵：等待 Google 伺服器把音檔處理完畢 (ACTIVE 狀態)
+      # ⏳ 等待 Google 伺服器把音檔處理完畢 (ACTIVE 狀態)
       st.write("🎧 等待 Google 雲端轉碼與聆聽音訊內容...")
       wait_seconds = 0
       while getattr(audio_file.state, "name", "") == "PROCESSING":
@@ -123,7 +123,6 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
       if getattr(audio_file.state, "name", "") == "FAILED":
         raise ValueError("Google 伺服器處理音訊檔案失敗，請確認音檔是否損毀。")
 
-      st.write("🧠 正在萃取看診重點與問答清單...")
       prompt = """
             請仔細聆聽這段醫療看診時的對話錄音，並幫我分析並萃取重點，整理成嚴格的 JSON 格式（不要包含任何 markdown 程式碼標記如 ```json）：
             {
@@ -137,10 +136,44 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
             }
             """
 
-      # 呼叫模型
-      response = client.models.generate_content(
-          model="gemini-3.8-flash", contents=[audio_file, prompt]
-      )
+      # 🔄 模型優先順序清單：優先使用 3.8，若遇伺服器壅擠或不可用則自動降級
+      models_to_try = [
+          "gemini-3.8-flash",
+          "gemini-2.5-flash",
+          "gemini-1.5-flash",
+      ]
+      response = None
+      used_model = None
+      last_error = None
+
+      for idx, model_name in enumerate(models_to_try):
+        try:
+          st.write(f"🧠 正在使用 **{model_name}** 萃取看診重點與問答清單...")
+          response = client.models.generate_content(
+              model=model_name, contents=[audio_file, prompt]
+          )
+          used_model = model_name
+          break  # 成功取得回應就跳出迴圈
+        except Exception as api_err:
+          last_error = api_err
+          err_str = str(api_err)
+          # 遇到 503(伺服器忙碌)、429(流量限制) 或 404(模型未開放) 時自動切換下一個備用模型
+          if (
+              any(code in err_str for code in ["503", "429", "404"])
+              and idx < len(models_to_try) - 1
+          ):
+            next_model = models_to_try[idx + 1]
+            st.write(
+                f"⚠️ {model_name} 目前伺服器壅擠或暫無法使用，自動切換至備用模型"
+                f" **{next_model}**..."
+            )
+            time.sleep(2)
+            continue
+          else:
+            raise api_err
+
+      if response is None:
+        raise last_error or RuntimeError("所有備用模型皆無法完成分析。")
 
       # 刪除雲端暫存檔案
       try:
@@ -148,7 +181,11 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
       except Exception:
         pass
 
-      status.update(label="✅ 語音分析完成！", state="complete", expanded=False)
+      status.update(
+          label=f"✅ 語音分析完成！（使用模型：{used_model}）",
+          state="complete",
+          expanded=False,
+      )
 
       result_text = response.text.strip()
       if result_text.startswith("```"):
@@ -157,7 +194,7 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
         )
 
       parsed_json = json.loads(result_text)
-      return parsed_json, "（已透過最新 Google GenAI SDK 語音分析完成）"
+      return parsed_json, f"（已透過 {used_model} 完成語音分析）"
   except Exception as e:
     st.error(f"Gemini 語音分析失敗：{e}")
     return None, None
