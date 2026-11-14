@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
+
 # 頁面基本設定
 st.set_page_config(
     page_title="阿爸的人生劇本", page_icon="🩺", layout="centered"
@@ -118,7 +119,7 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
 
       # 呼叫最新閃電模型 gemini-2.5-flash
       response = client.models.generate_content(
-          model="gemini-2.5-flash", contents=[audio_file, prompt]
+          model="gemini-3.8-flash", contents=[audio_file, prompt]
       )
 
       # 刪除雲端暫存檔案
