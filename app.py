@@ -136,12 +136,8 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
             }
             """
 
-      # 🔄 模型優先順序清單：優先使用 3.8，若遇伺服器壅擠或不可用則自動降級
-      models_to_try = [
-          "gemini-3.8-flash",
-          "gemini-2.5-flash",
-          "gemini-1.5-flash",
-      ]
+      # 🔄 模型優先順序清單（使用新版 SDK 支援的最新模型）
+      models_to_try = ["gemini-3.8-flash", "gemini-2.0-flash"]
       response = None
       used_model = None
       last_error = None
@@ -157,7 +153,6 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
         except Exception as api_err:
           last_error = api_err
           err_str = str(api_err)
-          # 遇到 503(伺服器忙碌)、429(流量限制) 或 404(模型未開放) 時自動切換下一個備用模型
           if (
               any(code in err_str for code in ["503", "429", "404"])
               and idx < len(models_to_try) - 1
