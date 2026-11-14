@@ -15,7 +15,7 @@ SCOPES = [
 ]
 
 
-# 載入雲端試算表資料
+# 載入雲端試算表資料 (驗血與醫療歷程)
 def load_data():
   try:
     if "gcp_service_account" in st.secrets:
@@ -41,12 +41,52 @@ def load_data():
     return None, pd.DataFrame()
 
 
+# 載入「看診問答」資料
+def load_qa_data():
+  try:
+    if "gcp_service_account" in st.secrets:
+      creds = Credentials.from_service_account_info(
+          st.secrets["gcp_service_account"], scopes=SCOPES
+      )
+    else:
+      creds = Credentials.from_service_account_file(
+          "credentials.json", scopes=SCOPES
+      )
+
+    client = gspread.authorize(creds)
+    try:
+      qa_sheet = client.open("我的健康與就醫紀錄").worksheet("看診問答")
+    except Exception:
+      # 如果找不到「看診問答」分頁，自動建立一個新分頁
+      qa_sheet = client.open("我的健康與就醫紀錄").add_worksheet(
+          title="看診問答", rows=100, cols=4
+      )
+      qa_sheet.update(
+          [["預定看診日期", "想詢問的問題", "醫生回答與備註", "狀態"]]
+      )
+
+    qa_data = qa_sheet.get_all_records()
+    qa_df = pd.DataFrame(qa_data)
+
+    if not qa_df.empty and "預定看診日期" in qa_df.columns:
+      qa_df["預定看診日期"] = pd.to_datetime(
+          qa_df["預定看診日期"], format="mixed", errors="coerce"
+      )
+      qa_df = qa_df.sort_values("預定看診日期", ascending=True)
+    return qa_sheet, qa_df
+  except Exception as e:
+    return None, pd.DataFrame()
+
+
 sheet, df = load_data()
+qa_sheet, qa_df = load_qa_data()
 
 st.title("🩺 身體的功課")
 
-# 分頁籤設計
-tab1, tab2, tab3 = st.tabs(["📊 數據趨勢", "📋 在線編輯與歷程", "➕ 新增紀錄"])
+# 分頁籤設計 (新增了「💬 看診問答」)
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["📊 數據趨勢", "📋 在線編輯與歷程", "➕ 新增紀錄", "💬 看診問答"]
+)
 
 # Tab 1: 驗血數據趨勢圖
 with tab1:
@@ -57,12 +97,9 @@ with tab1:
 
     if not blood_df.empty:
       blood_df["數值"] = pd.to_numeric(blood_df["數值"], errors="coerce")
-      
-      # 取得所有不重複的血液指標，並透過 sorted() 進行文字排序
       items = sorted(blood_df["項目"].dropna().unique().astype(str))
 
       selected_item = st.selectbox("選擇要檢視的血液指標", items)
-
       item_df = blood_df[blood_df["項目"] == selected_item].sort_values(
           "日期"
       )
@@ -70,12 +107,9 @@ with tab1:
       if not item_df.empty:
         fig = go.Figure()
 
-        # -------------------------------------------------------------
-        # 🎨 顏色與圖示統一設定
-        # -------------------------------------------------------------
-        CHEMO_COLOR = "#c8c8c8"  # 化療垂直虛線顏色
-        NORMAL_POINT_COLOR = "#64dcf0"  # 正常驗血點顏色
-        ABNORMAL_POINT_COLOR = "#FF4B4B"  # 異常驗血點顏色 (紅色)
+        CHEMO_COLOR = "#c8c8c8"
+        NORMAL_POINT_COLOR = "#64dcf0"
+        ABNORMAL_POINT_COLOR = "#FF4B4B"
 
         category_styles = {
             "看診": {
@@ -95,7 +129,6 @@ with tab1:
             },
         }
 
-        # 檢查是否有「數值異常」欄位，若無則補空欄位防呆
         if "數值異常" not in item_df.columns:
           item_df["數值異常"] = ""
 
@@ -107,7 +140,6 @@ with tab1:
           else:
             point_colors.append(NORMAL_POINT_COLOR)
 
-        # 1. 繪製驗血數據折線
         fig.add_trace(
             go.Scatter(
                 x=item_df["日期"],
@@ -117,9 +149,7 @@ with tab1:
                 text=item_df["數值"],
                 textposition="top center",
                 line=dict(color="#1F77B4", width=2),
-                marker=dict(
-                    size=10, color=point_colors
-                ),
+                marker=dict(size=10, color=point_colors),
                 hovertemplate=(
                     "<b>日期</b>: %{x|%Y-%m-%d}<br>"
                     "<b>數值</b>: %{y}<br>"
@@ -135,7 +165,6 @@ with tab1:
             )
         )
 
-        # 2. 🏥 多筆入院到出院背景淡色區塊
         if not event_df.empty:
           sorted_events = event_df.sort_values("日期")
           admit_records = sorted_events[
@@ -168,7 +197,6 @@ with tab1:
                 line_width=0,
             )
 
-        # 3. 🟣 化療事件
         if not event_df.empty:
           chemo_df = event_df[event_df["類別"] == "化療"]
           other_events_df = event_df[event_df["類別"] != "化療"]
@@ -199,7 +227,6 @@ with tab1:
             )
             first_chemo = False
 
-          # 4. 其他事件（方案 B 合併技術）
           for cat, group in other_events_df.groupby("類別"):
             filtered_group = group[
                 ~group["項目"].str.contains("入院|出院", na=False)
@@ -227,7 +254,6 @@ with tab1:
               })
 
             agg_df = pd.DataFrame(aggregated_records)
-
             style = category_styles.get(
                 cat,
                 {"color": "gray", "symbol": "diamond", "name": f"{cat}紀錄"},
@@ -312,14 +338,12 @@ with tab2:
   else:
     st.info("目前試算表中沒有資料。")
 
-# Tab 3: 新增筆記 / 紀錄
+# Tab 3: 新增紀錄
 with tab3:
-  st.header("新增筆記 / 紀錄")
-  
-  # 1. 類別選擇移到表單外，這樣一選擇就會即時觸發畫面更新
+  st.header("➕ 新增健康與就醫紀錄")
+
   cat_val = st.selectbox("類別", ["驗血", "看診", "用藥", "化療", "其他"])
 
-  # 取得現有的血檢項目清單
   existing_blood_items = []
   if not df.empty and "類別" in df.columns:
     b_df = df[df["類別"] == "驗血"]
@@ -327,13 +351,16 @@ with tab3:
       existing_blood_items = sorted(b_df["項目"].dropna().unique().astype(str))
 
   with st.form("add_data_form", clear_on_submit=True):
-    date_val = st.date_input("日期")
-    
-    # 2. 根據上方選好的類別，動態切換項目欄位
+    import datetime
+
+    date_val = st.date_input("日期", value=datetime.date.today())
+
     if cat_val == "驗血" and existing_blood_items:
       item_val = st.selectbox("項目 (選擇驗血指標)", existing_blood_items)
     else:
-      item_val = st.text_input("項目 (如: 入院, 出院, 第1次化療, 門診追蹤, 直腸科)")
+      item_val = st.text_input(
+          "項目 (如: 入院, 出院, 第1次化療, 門診追蹤, 直腸科)"
+      )
 
     val_val = st.text_input("數值 (驗血才需填寫，無則留空)")
     unit_val = st.text_input("單位 (如: mg/dL)")
@@ -358,6 +385,76 @@ with tab3:
             abnormal_val,
         ]
         sheet.append_row(new_row)
-        st.success("成功新增資料！請刷新頁面查看最新互動圖表。")
+        st.success("🎉 成功寫入 Google 試算表！請刷新頁面查看最新趨勢圖。")
+        st.rerun()
       else:
         st.error("連線至 Google 試算表失敗，無法寫入。")
+
+# Tab 4: 💬 看診問答專區
+with tab4:
+  st.header("💬 下次看診問題與醫生回答記錄")
+  st.caption(
+      "💡 這裡可以記錄下次看診想問醫生的問題清單；看診後也可以直接在下方表格填入醫生的回答與備註！"
+  )
+
+  # 1. 新增想問的問題表單
+  with st.form("add_qa_form", clear_on_submit=True):
+    st.subheader("📝 新增要詢問的問題")
+    import datetime
+
+    qa_date_val = st.date_input("預定看診日期", value=datetime.date.today())
+    question_val = st.text_area("想詢問的問題 (例如：最近容易疲倦正常嗎？藥物劑量需要調整嗎？)")
+    status_val = st.selectbox("狀態", ["待詢問", "已詢問"])
+
+    qa_submitted = st.form_submit_button("新增到問題清單")
+
+    if qa_submitted:
+      if qa_sheet is not None:
+        try:
+          new_qa_row = [str(qa_date_val), question_val, "", status_val]
+          qa_sheet.append_row(new_qa_row)
+          st.success("✅ 成功新增問題！")
+          st.rerun()
+        except Exception as e:
+          st.error(f"❌ 新增失敗：{e}")
+      else:
+        st.error("無法連線至「看診問答」試算表。")
+
+  st.divider()
+
+  # 2. 顯示與在線編輯清單
+  st.subheader("📋 問答紀錄總覽（可直接雙擊修改問題、填寫醫生回答或更改狀態）")
+
+  if not qa_df.empty:
+    edit_qa_df = qa_df.copy()
+    if "預定看診日期" in edit_qa_df.columns:
+      edit_qa_df["預定看診日期"] = edit_qa_df["預定看診日期"].dt.strftime(
+          "%Y-%m-%d"
+      )
+
+    edited_qa_df = st.data_editor(
+        edit_qa_df,
+        use_container_width=True,
+        num_rows="dynamic",
+        key="qa_data_editor",
+    )
+
+    if st.button("💾 儲存問答修改至 Google 試算表", type="primary"):
+      if qa_sheet is not None:
+        try:
+          updated_qa_data = (
+              edited_qa_df.fillna("").astype(str).values.tolist()
+          )
+          qa_sheet.clear()
+          qa_header = list(edited_qa_df.columns)
+          qa_sheet.update([qa_header] + updated_qa_data)
+          st.success("✅ 問答紀錄已成功同步更新至 Google 試算表！")
+          st.rerun()
+        except Exception as e:
+          st.error(f"❌ 雲端同步失敗：{e}")
+      else:
+        st.error("無法連線至 Google 試算表。")
+  else:
+    st.info(
+        "目前尚無看診問答紀錄，趕快使用上方表單新增第一個想問醫生的問題吧！"
+    )
