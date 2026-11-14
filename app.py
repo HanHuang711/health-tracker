@@ -84,7 +84,7 @@ def load_qa_data():
     return None, pd.DataFrame()
 
 
-# 🎙️ 優化版：直接使用 gemini-2.0-flash 進行高效語音分析
+# 🎙️ 使用新版 Google GenAI SDK 與 gemini-3.8-flash 分析看診音檔
 def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
   api_key = st.secrets.get("GEMINI_API_KEY", "")
   if not api_key:
@@ -93,7 +93,9 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
 
   tmp_path = None
   try:
-    with st.spinner("🤖 正在上傳音檔並請 Gemini 快速萃取看診重點中..."):
+    with st.spinner(
+        "🤖 正在上傳音檔並透過 Gemini 3.8 Flash 萃取看診重點中..."
+    ):
       client = genai.Client(api_key=api_key)
 
       # 建立臨時檔案
@@ -105,13 +107,13 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
       # 上傳音檔
       audio_file = client.files.upload(file=tmp_path)
 
-      # 簡化轉碼等待機制（最多等 30 秒）
+      # 等待雲端轉碼就緒（最多等待 60 秒）
       wait_seconds = 0
       while getattr(audio_file.state, "name", "") == "PROCESSING":
-        if wait_seconds >= 30:
+        if wait_seconds >= 60:
           raise TimeoutError("雲端音訊轉碼逾時。")
-        time.sleep(2)
-        wait_seconds += 2
+        time.sleep(3)
+        wait_seconds += 3
         audio_file = client.files.get(name=audio_file.name)
 
       if getattr(audio_file.state, "name", "") == "FAILED":
@@ -130,9 +132,9 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
             }
             """
 
-      # 直接使用目前最穩定、速度最快的 gemini-2.0-flash
+      # 使用官方強制指定的最新 gemini-3.8-flash 模型
       response = client.models.generate_content(
-          model="gemini-2.0-flash", contents=[audio_file, prompt]
+          model="gemini-3.8-flash", contents=[audio_file, prompt]
       )
 
       # 刪除雲端暫存檔
@@ -148,7 +150,7 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
         )
 
       parsed_json = json.loads(result_text)
-      return parsed_json, "（已透過 gemini-2.0-flash 完成語音分析）"
+      return parsed_json, "（已透過 gemini-3.8-flash 完成語音分析）"
   except Exception as e:
     st.error(f"Gemini 語音分析失敗：{e}")
     return None, None
