@@ -4,4 +4,4 @@ pandas
 plotly
 oauth2client
 google-auth
-openai
+google-generativeai
