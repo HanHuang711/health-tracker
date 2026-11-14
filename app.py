@@ -1,5 +1,8 @@
+import datetime
 import json
+import os
 import tempfile
+import time
 import google.genai as genai
 import gspread
 import pandas as pd
@@ -81,29 +84,46 @@ def load_qa_data():
     return None, pd.DataFrame()
 
 
-# 🎙️ 使用新版 Google GenAI SDK 分析看診音檔摘要
+# 🎙️ 使用新版 Google GenAI SDK 分析看診音檔摘要（含檔案處理等待機制）
 def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
   api_key = st.secrets.get("GEMINI_API_KEY", "")
   if not api_key:
     st.error("未設定 GEMINI_API_KEY，無法使用 Gemini 語音辨識功能。")
     return None, None
 
+  tmp_path = None
   try:
-    with st.spinner(
-        "🤖 Google Gemini (GenAI) 正在上傳並聆聽音檔、萃取看診重點中..."
-    ):
+    with st.status(
+        "🤖 正在上傳與處理音檔，請稍候...", expanded=True
+    ) as status:
       # 初始化新版 Client
       client = genai.Client(api_key=api_key)
 
       # 建立臨時檔案儲存上傳的音訊
+      st.write("📁 正在準備音訊暫存檔...")
       suffix = "." + file_name.split(".")[-1] if "." in file_name else ".mp3"
       with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(audio_file_bytes)
         tmp_path = tmp.name
 
       # 使用新版 Files API 上傳音檔
+      st.write("☁️ 正在將音檔上傳至 Google 雲端...")
       audio_file = client.files.upload(file=tmp_path)
 
+      # ⏳ 關鍵：等待 Google 伺服器把音檔處理完畢 (ACTIVE 狀態)
+      st.write("🎧 等待 Google 雲端轉碼與聆聽音訊內容...")
+      wait_seconds = 0
+      while getattr(audio_file.state, "name", "") == "PROCESSING":
+        if wait_seconds >= 120:
+          raise TimeoutError("雲端音訊處理超時（超過 2 分鐘），請稍後再試。")
+        time.sleep(3)
+        wait_seconds += 3
+        audio_file = client.files.get(name=audio_file.name)
+
+      if getattr(audio_file.state, "name", "") == "FAILED":
+        raise ValueError("Google 伺服器處理音訊檔案失敗，請確認音檔是否損毀。")
+
+      st.write("🧠 正在萃取看診重點與問答清單...")
       prompt = """
             請仔細聆聽這段醫療看診時的對話錄音，並幫我分析並萃取重點，整理成嚴格的 JSON 格式（不要包含任何 markdown 程式碼標記如 ```json）：
             {
@@ -117,7 +137,7 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
             }
             """
 
-      # 呼叫最新閃電模型 gemini-2.5-flash
+      # 呼叫模型
       response = client.models.generate_content(
           model="gemini-3.8-flash", contents=[audio_file, prompt]
       )
@@ -125,8 +145,10 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
       # 刪除雲端暫存檔案
       try:
         client.files.delete(name=audio_file.name)
-      except:
+      except Exception:
         pass
+
+      status.update(label="✅ 語音分析完成！", state="complete", expanded=False)
 
       result_text = response.text.strip()
       if result_text.startswith("```"):
@@ -139,6 +161,13 @@ def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
   except Exception as e:
     st.error(f"Gemini 語音分析失敗：{e}")
     return None, None
+  finally:
+    # 清理本機暫存檔案
+    if tmp_path and os.path.exists(tmp_path):
+      try:
+        os.remove(tmp_path)
+      except Exception:
+        pass
 
 
 sheet, df = load_data()
@@ -417,8 +446,6 @@ with tab3:
       existing_blood_items = sorted(b_df["項目"].dropna().unique().astype(str))
 
   with st.form("add_data_form", clear_on_submit=True):
-    import datetime
-
     date_val = st.date_input("日期", value=datetime.date.today())
 
     if cat_val == "驗血" and existing_blood_items:
@@ -507,8 +534,6 @@ with tab4:
       if st.button("📥 將上述 AI 整理的問答全部寫入 Google 試算表"):
         if qa_sheet is not None:
           try:
-            import datetime
-
             today_str = str(datetime.date.today())
             rows_to_add = []
             for qa_item in st.session_state["gemini_audio_qa"].get(
@@ -535,8 +560,6 @@ with tab4:
   # 1. 手動新增想問的問題表單
   with st.form("add_qa_form", clear_on_submit=True):
     st.subheader("📝 手動新增要詢問的問題")
-    import datetime
-
     qa_date_val = st.date_input("預定看診日期", value=datetime.date.today())
     question_val = st.text_area("想詢問的問題 (例如：最近容易疲倦正常嗎？)")
     status_val = st.selectbox("狀態", ["待詢問", "已詢問"])
