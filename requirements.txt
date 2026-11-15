@@ -5,3 +5,4 @@ plotly
 oauth2client
 google-auth
 google-genai
+faster-whisper
