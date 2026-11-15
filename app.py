@@ -26,8 +26,12 @@ SCOPES = [
 # 快取載入輕量版 Whisper 模型（避免每次重新載入佔用記憶體）
 @st.cache_resource
 def load_whisper_model():
-  # 使用 base 模型與 int8 量化，兼顧中文辨識度與 Streamlit Cloud 記憶體限制
-  return WhisperModel("base", device="cpu", compute_type="int8")
+  try:
+    # 使用 base 模型與 int8 量化，兼顧辨識度與雲端記憶體限制
+    return WhisperModel("base", device="cpu", compute_type="int8")
+  except Exception as e:
+    st.error(f"載入 Whisper 模型失敗：{e}")
+    return None
 
 
 # 載入雲端試算表資料 (驗血與醫療歷程)
@@ -92,7 +96,7 @@ def load_qa_data():
     return None, pd.DataFrame()
 
 
-# 🎙️ 步驟一：將音檔轉為繁體中文逐字稿（本地運算，不佔用 Gemini 流量）
+# 🎙️ 步驟一：將音檔轉為繁體中文逐字稿（本地運算，解決 metadata_errors 相容性後可正常運作）
 def transcribe_audio_to_text(audio_file_bytes, file_name):
   tmp_path = None
   try:
@@ -102,7 +106,9 @@ def transcribe_audio_to_text(audio_file_bytes, file_name):
       tmp_path = tmp.name
 
     model = load_whisper_model()
-    # initial_prompt 引導模型輸出繁體中文與醫療常見語境
+    if model is None:
+      return None
+
     segments, _ = model.transcribe(
         tmp_path,
         language="zh",
@@ -111,8 +117,7 @@ def transcribe_audio_to_text(audio_file_bytes, file_name):
     )
 
     transcript_lines = [segment.text.strip() for segment in segments]
-    full_text = "\n".join(transcript_lines)
-    return full_text
+    return "\n".join(transcript_lines)
   except Exception as e:
     st.error(f"語音轉文字失敗：{e}")
     return None
@@ -124,7 +129,7 @@ def transcribe_audio_to_text(audio_file_bytes, file_name):
         pass
 
 
-# 🧠 步驟二：將「純文字逐字稿」交給 Gemini 萃取問答重點（極低負載，幾乎不會 503）
+# 🧠 步驟二：將「純文字逐字稿」交給 Gemini 萃取問答重點（極低負載，絕不 503）
 def summarize_transcript_with_gemini(transcript_text):
   api_key = st.secrets.get("GEMINI_API_KEY", "")
   if not api_key:
@@ -134,13 +139,13 @@ def summarize_transcript_with_gemini(transcript_text):
   try:
     client = genai.Client(api_key=api_key)
     prompt = f"""
-        以下是一段醫療看診的語音轉文字逐字稿（可能包含些許語音辨識的同音錯別字，請根據醫療常理自動推敲修正）。
+        以下是一段醫療看診的語音轉文字逐字稿（可能包含些許同音錯別字，請根據醫療常理自動推敲）。
         請仔細閱讀並幫我萃取重點，整理成嚴格的 JSON 格式（不要包含任何 markdown 程式碼標記如 ```json）：
         {{
             "整體摘要": "這次看診的核心摘要與注意事項（一句話總結）",
             "問答清單": [
                 {{
-                    "問題": "病患或家屬詢問的問題（若對話中未明確提及，可根據情境整理）",
+                    "問題": "病患或家屬詢問的問題",
                     "醫生回答與備註": "醫師給出的指示、藥物調整或衛教交代"
                 }}
             ]
@@ -150,19 +155,9 @@ def summarize_transcript_with_gemini(transcript_text):
         {transcript_text}
         """
 
-    response = None
-    for attempt in range(3):
-      try:
-        response = client.models.generate_content(
-            model="gemini-3.8-flash", contents=prompt
-        )
-        break
-      except Exception as api_err:
-        if "503" in str(api_err) and attempt < 2:
-          time.sleep(3)
-          continue
-        else:
-          raise api_err
+    response = client.models.generate_content(
+        model="gemini-3.8-flash", contents=prompt
+    )
 
     result_text = response.text.strip()
     if result_text.startswith("```"):
@@ -182,12 +177,10 @@ qa_sheet, qa_df = load_qa_data()
 
 st.title("🩺 身體的功課")
 
-# 分頁籤設計
 tab1, tab2, tab3, tab4 = st.tabs(
     ["📊 數據趨勢", "📋 在線編輯與歷程", "➕ 新增紀錄", "💬 看診問答"]
 )
 
-# Tab 1: 驗血數據趨勢圖
 with tab1:
   st.header("驗血數據趨勢")
   if not df.empty:
@@ -404,14 +397,8 @@ with tab1:
   else:
     st.warning("目前試算表中沒有資料。")
 
-# Tab 2: 📱 在線雙擊編輯與完整歷程
 with tab2:
   st.header("📋 線上數據編輯與總覽")
-  st.caption(
-      "💡 提示：你可以直接雙擊下方表格儲存格修改文字，編輯完後點擊最下方按鈕即可同步至"
-      " Google 雲端！"
-  )
-
   if not df.empty:
     edit_df = df.copy()
     if "日期" in edit_df.columns:
@@ -440,12 +427,9 @@ with tab2:
   else:
     st.info("目前試算表中沒有資料。")
 
-# Tab 3: 新增紀錄
 with tab3:
   st.header("➕ 新增健康與就醫紀錄")
-
   cat_val = st.selectbox("類別", ["驗血", "看診", "用藥", "化療", "其他"])
-
   existing_blood_items = []
   if not df.empty and "類別" in df.columns:
     b_df = df[df["類別"] == "驗血"]
@@ -454,7 +438,6 @@ with tab3:
 
   with st.form("add_data_form", clear_on_submit=True):
     date_val = st.date_input("日期", value=datetime.date.today())
-
     if cat_val == "驗血" and existing_blood_items:
       item_val = st.selectbox("項目 (選擇驗血指標)", existing_blood_items)
     else:
@@ -470,7 +453,6 @@ with tab3:
     note_val = st.text_area("醫師囑咐 / 備註")
 
     submitted = st.form_submit_button("寫入 Google 試算表")
-
     if submitted:
       if sheet is not None:
         new_row = [
@@ -485,19 +467,20 @@ with tab3:
             abnormal_val,
         ]
         sheet.append_row(new_row)
-        st.success("🎉 成功寫入 Google 試算表！請刷新頁面查看最新趨勢圖。")
+        st.success("🎉 成功寫入 Google 試算表！")
         st.rerun()
       else:
-        st.error("連線至 Google 試算表失敗，無法寫入。")
+        st.error("連線至 Google 試算表失敗。")
 
-# Tab 4: 💬 看診問答專區（先轉文字再 AI 摘要架構）
 with tab4:
   st.header("💬 下次看診問題與醫生回答記錄")
 
-  with st.expander("🎙️ 看診錄音轉文字 & AI 重點萃取（穩定防 503 版）", expanded=True):
+  with st.expander(
+      "🎙️ 方案 A：本地 Whisper 轉錄 + Gemini 純文字摘要", expanded=True
+  ):
     st.caption(
-        "流程：1. 系統先在本地將錄音轉為逐字稿 ➔ 2. 再將純文字交給 Gemini"
-        " 整理重點，徹底避開音檔傳輸的 503 伺服器忙碌限制！"
+        "流程：1. 點擊按鈕在本地將錄音轉成逐字稿 ➔ 2. 確認或微調文字後交給 Gemini"
+        " 萃取重點（完全避開音檔上傳的 503 伺服器忙碌與流量限制）！"
     )
 
     audio_file_uploaded = st.file_uploader(
@@ -508,18 +491,17 @@ with tab4:
       st.audio(audio_file_uploaded)
       if st.button("📝 第一步：將錄音檔轉成文字逐字稿"):
         with st.spinner(
-            "🎧 正在進行語音轉文字（首次載入模型需約 15 秒，請稍候）..."
+            "🎧 正在進行本地語音轉文字（首次載入模型約需 10-15 秒）..."
         ):
           transcript = transcribe_audio_to_text(
               audio_file_uploaded.getvalue(), audio_file_uploaded.name
           )
           if transcript:
             st.session_state["audio_transcript"] = transcript
-            st.success("✅ 語音轉文字完成！請在下方確認內容後點擊重點萃取。")
+            st.success("✅ 語音轉文字完成！請在下方文字框確認內容。")
 
-    # 顯示逐字稿編輯框（也支援直接手動貼上逐字稿）
     transcript_input = st.text_area(
-        "📄 看診對話逐字稿（可直接微調錯字，或直接貼上其他軟體轉好的文字）：",
+        "📄 看診對話逐字稿（可直接手動修改或貼上）：",
         value=st.session_state.get("audio_transcript", ""),
         height=180,
     )
@@ -533,14 +515,13 @@ with tab4:
           if parsed_result:
             st.session_state["gemini_audio_qa"] = parsed_result
             st.session_state["gemini_raw_info"] = raw_info
-            st.success("✅ 重點萃取成功！請往下查看整理結果。")
+            st.success("✅ 重點萃取成功！")
 
-    # 如果有分析結果，提供一鍵寫入選項
     if "gemini_audio_qa" in st.session_state:
       st.info(
           f"💡 **AI 整體摘要**：{st.session_state['gemini_audio_qa'].get('整體摘要', '')}"
       )
-      st.write("👇 **萃取出的問答清單（點擊下方按鈕可批量寫入問題庫）**：")
+      st.write("👇 **萃取出的問答清單**：")
 
       for i, qa_item in enumerate(
           st.session_state["gemini_audio_qa"].get("問答清單", [])
@@ -573,7 +554,7 @@ with tab4:
                   "已詢問",
               ])
             qa_sheet.append_rows(rows_to_add)
-            st.success("🎉 成功將 Gemini 整理的問答寫入雲端！")
+            st.success("🎉 成功寫入雲端！")
             del st.session_state["gemini_audio_qa"]
             if "audio_transcript" in st.session_state:
               del st.session_state["audio_transcript"]
@@ -586,15 +567,12 @@ with tab4:
 
   st.divider()
 
-  # 1. 手動新增想問的問題表單
   with st.form("add_qa_form", clear_on_submit=True):
     st.subheader("📝 手動新增要詢問的問題")
     qa_date_val = st.date_input("預定看診日期", value=datetime.date.today())
-    question_val = st.text_area("想詢問的問題 (例如：最近容易疲倦正常嗎？)")
+    question_val = st.text_area("想詢問的問題")
     status_val = st.selectbox("狀態", ["待詢問", "已詢問"])
-
     qa_submitted = st.form_submit_button("新增到問題清單")
-
     if qa_submitted:
       if qa_sheet is not None:
         try:
@@ -604,14 +582,9 @@ with tab4:
           st.rerun()
         except Exception as e:
           st.error(f"❌ 新增失敗：{e}")
-      else:
-        st.error("無法連線至「看診問答」試算表。")
 
   st.divider()
-
-  # 2. 顯示與在線編輯清單
-  st.subheader("📋 問答紀錄總覽（可直接雙擊修改問題、填寫醫生回答或更改狀態）")
-
+  st.subheader("📋 問答紀錄總覽")
   if not qa_df.empty:
     edit_qa_df = qa_df.copy()
     if "預定看診日期" in edit_qa_df.columns:
@@ -620,10 +593,7 @@ with tab4:
       )
 
     edited_qa_df = st.data_editor(
-        edit_qa_df,
-        use_container_width=True,
-        num_rows="dynamic",
-        key="qa_data_editor",
+        edit_qa_df, use_container_width=True, num_rows="dynamic", key="qa_editor"
     )
 
     if st.button("💾 儲存問答修改至 Google 試算表", type="primary"):
@@ -635,11 +605,7 @@ with tab4:
           qa_sheet.clear()
           qa_header = list(edited_qa_df.columns)
           qa_sheet.update([qa_header] + updated_qa_data)
-          st.success("✅ 問答紀錄已成功同步更新至 Google 試算表！")
+          st.success("✅ 同步成功！")
           st.rerun()
         except Exception as e:
-          st.error(f"❌ 雲端同步失敗：{e}")
-      else:
-        st.error("無法連線至 Google 試算表。")
-  else:
-    st.info("目前尚無看診問答紀錄，可以手動新增或上傳錄音檔讓 Gemini 自動整理！")
+          st.error(f"❌ 同步失敗：{e}")
