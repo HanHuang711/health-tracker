@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import time
+from faster_whisper import WhisperModel
 import google.genai as genai
 import gspread
 import pandas as pd
@@ -20,6 +21,13 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+
+
+# 快取載入輕量版 Whisper 模型（避免每次重新載入佔用記憶體）
+@st.cache_resource
+def load_whisper_model():
+  # 使用 base 模型與 int8 量化，兼顧中文辨識度與 Streamlit Cloud 記憶體限制
+  return WhisperModel("base", device="cpu", compute_type="int8")
 
 
 # 載入雲端試算表資料 (驗血與醫療歷程)
@@ -84,82 +92,89 @@ def load_qa_data():
     return None, pd.DataFrame()
 
 
-# 🎙️ 使用新版 Google GenAI SDK 與 gemini-3.8-flash 分析看診音檔
-def analyze_audio_consultation_gemini(audio_file_bytes, file_name):
-  api_key = st.secrets.get("GEMINI_API_KEY", "")
-  if not api_key:
-    st.error("未設定 GEMINI_API_KEY，無法使用 Gemini 語音辨識功能。")
-    return None, None
-
+# 🎙️ 步驟一：將音檔轉為繁體中文逐字稿（本地運算，不佔用 Gemini 流量）
+def transcribe_audio_to_text(audio_file_bytes, file_name):
   tmp_path = None
   try:
-    with st.spinner(
-        "🤖 正在上傳音檔並透過 Gemini 3.8 Flash 萃取看診重點中..."
-    ):
-      client = genai.Client(api_key=api_key)
+    suffix = "." + file_name.split(".")[-1] if "." in file_name else ".m4a"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+      tmp.write(audio_file_bytes)
+      tmp_path = tmp.name
 
-      # 建立臨時檔案
-      suffix = "." + file_name.split(".")[-1] if "." in file_name else ".mp3"
-      with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(audio_file_bytes)
-        tmp_path = tmp.name
+    model = load_whisper_model()
+    # initial_prompt 引導模型輸出繁體中文與醫療常見語境
+    segments, _ = model.transcribe(
+        tmp_path,
+        language="zh",
+        beam_size=5,
+        initial_prompt="以下是醫院門診時病患、家屬與醫師的繁體中文對話紀錄：",
+    )
 
-      # 上傳音檔
-      audio_file = client.files.upload(file=tmp_path)
-
-      # 等待雲端轉碼就緒（最多等待 60 秒）
-      wait_seconds = 0
-      while getattr(audio_file.state, "name", "") == "PROCESSING":
-        if wait_seconds >= 60:
-          raise TimeoutError("雲端音訊轉碼逾時。")
-        time.sleep(3)
-        wait_seconds += 3
-        audio_file = client.files.get(name=audio_file.name)
-
-      if getattr(audio_file.state, "name", "") == "FAILED":
-        raise ValueError("Google 伺服器處理音訊檔案失敗，請確認音檔是否損毀。")
-
-      prompt = """
-            請仔細聆聽這段醫療看診時的對話錄音，並幫我分析並萃取重點，整理成嚴格的 JSON 格式（不要包含任何 markdown 程式碼標記如 ```json）：
-            {
-                "整體摘要": "這次看診的核心摘要與注意事項（一句話總結）",
-                "問答清單": [
-                    {
-                        "問題": "病患或家屬詢問的問題（若對話中未明確提及，可根據情境整理）",
-                        "醫生回答與備註": "醫師給出的指示、藥物調整或衛教交代"
-                    }
-                ]
-            }
-            """
-
-      # 使用官方強制指定的最新 gemini-3.8-flash 模型
-      response = client.models.generate_content(
-          model="gemini-3.8-flash", contents=[audio_file, prompt]
-      )
-
-      # 刪除雲端暫存檔
-      try:
-        client.files.delete(name=audio_file.name)
-      except Exception:
-        pass
-
-      result_text = response.text.strip()
-      if result_text.startswith("```"):
-        result_text = (
-            result_text.replace("```json", "").replace("```", "").strip()
-        )
-
-      parsed_json = json.loads(result_text)
-      return parsed_json, "（已透過 gemini-3.8-flash 完成語音分析）"
+    transcript_lines = [segment.text.strip() for segment in segments]
+    full_text = "\n".join(transcript_lines)
+    return full_text
   except Exception as e:
-    st.error(f"Gemini 語音分析失敗：{e}")
-    return None, None
+    st.error(f"語音轉文字失敗：{e}")
+    return None
   finally:
     if tmp_path and os.path.exists(tmp_path):
       try:
         os.remove(tmp_path)
       except Exception:
         pass
+
+
+# 🧠 步驟二：將「純文字逐字稿」交給 Gemini 萃取問答重點（極低負載，幾乎不會 503）
+def summarize_transcript_with_gemini(transcript_text):
+  api_key = st.secrets.get("GEMINI_API_KEY", "")
+  if not api_key:
+    st.error("未設定 GEMINI_API_KEY，無法使用 Gemini 摘要功能。")
+    return None, None
+
+  try:
+    client = genai.Client(api_key=api_key)
+    prompt = f"""
+        以下是一段醫療看診的語音轉文字逐字稿（可能包含些許語音辨識的同音錯別字，請根據醫療常理自動推敲修正）。
+        請仔細閱讀並幫我萃取重點，整理成嚴格的 JSON 格式（不要包含任何 markdown 程式碼標記如 ```json）：
+        {{
+            "整體摘要": "這次看診的核心摘要與注意事項（一句話總結）",
+            "問答清單": [
+                {{
+                    "問題": "病患或家屬詢問的問題（若對話中未明確提及，可根據情境整理）",
+                    "醫生回答與備註": "醫師給出的指示、藥物調整或衛教交代"
+                }}
+            ]
+        }}
+
+        【看診對話逐字稿】：
+        {transcript_text}
+        """
+
+    response = None
+    for attempt in range(3):
+      try:
+        response = client.models.generate_content(
+            model="gemini-3.8-flash", contents=prompt
+        )
+        break
+      except Exception as api_err:
+        if "503" in str(api_err) and attempt < 2:
+          time.sleep(3)
+          continue
+        else:
+          raise api_err
+
+    result_text = response.text.strip()
+    if result_text.startswith("```"):
+      result_text = (
+          result_text.replace("```json", "").replace("```", "").strip()
+      )
+
+    parsed_json = json.loads(result_text)
+    return parsed_json, "（已透過純文字模式由 gemini-3.8-flash 完成重點萃取）"
+  except Exception as e:
+    st.error(f"Gemini 重點萃取失敗：{e}")
+    return None, None
 
 
 sheet, df = load_data()
@@ -475,30 +490,50 @@ with tab3:
       else:
         st.error("連線至 Google 試算表失敗，無法寫入。")
 
-# Tab 4: 💬 看診問答專區（包含 Gemini 錄音檔 AI 摘要）
+# Tab 4: 💬 看診問答專區（先轉文字再 AI 摘要架構）
 with tab4:
   st.header("💬 下次看診問題與醫生回答記錄")
 
-  # 🎙️ 上傳看診錄音檔自動分析區塊 (Gemini 驅動)
-  with st.expander("🎙️ 上傳看診錄音檔（Gemini AI 自動聆聽並萃取問答）", expanded=False):
+  with st.expander("🎙️ 看診錄音轉文字 & AI 重點萃取（穩定防 503 版）", expanded=True):
     st.caption(
-        "看完診後，可直接上傳手機錄音檔（支援 mp3, m4a, wav），Google Gemini"
-        " 會自動幫忙分析並整理成問答清單！"
+        "流程：1. 系統先在本地將錄音轉為逐字稿 ➔ 2. 再將純文字交給 Gemini"
+        " 整理重點，徹底避開音檔傳輸的 503 伺服器忙碌限制！"
     )
+
     audio_file_uploaded = st.file_uploader(
         "選擇看診錄音檔", type=["mp3", "m4a", "wav", "ogg", "webm"]
     )
 
     if audio_file_uploaded is not None:
       st.audio(audio_file_uploaded)
-      if st.button("🤖 開始用 Gemini 分析錄音檔"):
-        parsed_result, raw_info = analyze_audio_consultation_gemini(
-            audio_file_uploaded.getvalue(), audio_file_uploaded.name
-        )
-        if parsed_result:
-          st.session_state["gemini_audio_qa"] = parsed_result
-          st.session_state["gemini_raw_info"] = raw_info
-          st.success("✅ Gemini 語音分析成功！請往下查看整理結果。")
+      if st.button("📝 第一步：將錄音檔轉成文字逐字稿"):
+        with st.spinner(
+            "🎧 正在進行語音轉文字（首次載入模型需約 15 秒，請稍候）..."
+        ):
+          transcript = transcribe_audio_to_text(
+              audio_file_uploaded.getvalue(), audio_file_uploaded.name
+          )
+          if transcript:
+            st.session_state["audio_transcript"] = transcript
+            st.success("✅ 語音轉文字完成！請在下方確認內容後點擊重點萃取。")
+
+    # 顯示逐字稿編輯框（也支援直接手動貼上逐字稿）
+    transcript_input = st.text_area(
+        "📄 看診對話逐字稿（可直接微調錯字，或直接貼上其他軟體轉好的文字）：",
+        value=st.session_state.get("audio_transcript", ""),
+        height=180,
+    )
+
+    if transcript_input.strip():
+      if st.button("🧠 第二步：請 Gemini 根據上方文字萃取問答重點", type="primary"):
+        with st.spinner("🤖 Gemini 正在快速整理重點中..."):
+          parsed_result, raw_info = summarize_transcript_with_gemini(
+              transcript_input
+          )
+          if parsed_result:
+            st.session_state["gemini_audio_qa"] = parsed_result
+            st.session_state["gemini_raw_info"] = raw_info
+            st.success("✅ 重點萃取成功！請往下查看整理結果。")
 
     # 如果有分析結果，提供一鍵寫入選項
     if "gemini_audio_qa" in st.session_state:
@@ -539,7 +574,9 @@ with tab4:
               ])
             qa_sheet.append_rows(rows_to_add)
             st.success("🎉 成功將 Gemini 整理的問答寫入雲端！")
-            del st.session_state["gemini_audio_qa"]  # 清除暫存
+            del st.session_state["gemini_audio_qa"]
+            if "audio_transcript" in st.session_state:
+              del st.session_state["audio_transcript"]
             st.rerun()
           except Exception as e:
             st.error(f"寫入失敗：{e}")
