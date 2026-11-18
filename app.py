@@ -478,27 +478,60 @@ with tab4:
   st.header("💬 看診問答與智能記錄管理")
 
   # -------------------------------------------------------------
-  # 第一區：直接呈現「待詢問」的問題清單
+  # 第一區：直接呈現「待詢問」的問題清單（可在這裡直接填寫醫生回答）
   # -------------------------------------------------------------
-  st.subheader("🎯 第一區：目前待詢問的問題（看診時可以直接對照）")
+  st.subheader("🎯 第一區：目前待詢問的問題（看診時可直接填寫回覆並標記完成）")
+  
   if not qa_df.empty and "狀態" in qa_df.columns:
-    pending_df = qa_df[qa_df["狀態"] == "待詢問"]
-    if not pending_df.empty:
-      for _, p_row in pending_df.iterrows():
+    # 找出狀態為「待詢問」的列索引與資料
+    pending_indices = qa_df[qa_df["狀態"] == "待詢問"].index.tolist()
+    
+    if pending_indices:
+      pending_answers = {}
+      for idx in pending_indices:
+        row = qa_df.loc[idx]
         p_date = (
-            p_row["預定看診日期"].strftime("%Y-%m-%d")
-            if pd.notna(p_row["預定看診日期"])
+            row["預定看診日期"].strftime("%Y-%m-%d")
+            if pd.notna(row["預定看診日期"])
             else ""
         )
-        p_dept = p_row.get("科別", "一般")
-        p_q = p_row.get("想詢問的問題", "")
+        p_dept = row.get("科別", "一般")
+        p_q = row.get("想詢問的問題", "")
+        
         with st.container(border=True):
-          st.markdown(
-              f"📌 **日期**：`{p_date}` ｜ **科別**：`{p_dept}`"
+          st.markdown(f"📌 **日期**：`{p_date}` ｜ **科別**：`{p_dept}`")
+          st.markdown(f"❓ **想問的問題**：**{p_q}**")
+          # 讓使用者直接在介面上填寫醫生回覆
+          ans_input = st.text_input(
+              f"✍️ 填寫醫生回覆與備註 (ID: {idx})",
+              value="",
+              key=f"pending_ans_{idx}"
           )
-          st.markdown(f"❓ **想問的問題**：{p_q}")
+          pending_answers[idx] = ans_input
+
+      if st.button("📥 儲存上述醫生回覆，並將狀態更新為「已詢問」", type="primary", key="save_pending_answers"):
+        if qa_sheet is not None:
+          try:
+            # 讀取整張工作表的目前資料以便進行精準更新
+            all_records = qa_sheet.get_all_values()
+            header = all_records[0]
+            # 尋找「醫生回答與備註」與「狀態」欄位的索引位置
+            ans_col_idx = header.index("醫生回答與備註") + 1
+            status_col_idx = header.index("狀態") + 1
+
+            for idx, ans in pending_answers.items():
+              if ans.strip():
+                # gspread 的列編號從 1 開始，且第 1 行是表頭，所以資料行索引是 idx + 2
+                row_num = idx + 2
+                qa_sheet.update_cell(row_num, ans_col_idx, ans)
+                qa_sheet.update_cell(row_num, status_col_idx, "已詢問")
+
+            st.success("🎉 醫生回覆已成功儲存，並自動歸檔至已詢問狀態！")
+            st.rerun()
+          except Exception as e:
+            st.error(f"更新失敗：{e}")
     else:
-      st.info("目前沒有「待詢問」的問題，您可以透過下方區塊新增或產生！")
+      st.info("目前沒有「待詢問」的問題！")
   else:
     st.info("目前尚無問答紀錄。")
 
@@ -565,7 +598,6 @@ with tab4:
         key="tab4_transcript_input",
     )
 
-    # 選擇要歸檔的科別與日期
     col1, col2 = st.columns(2)
     with col1:
       archive_date = st.date_input("看診日期", value=datetime.date.today(), key="tab4_date")
@@ -590,7 +622,6 @@ with tab4:
           f"💡 **AI 整體摘要**：{st.session_state['gemini_audio_qa'].get('整體摘要', '')}"
       )
 
-      # 允許使用者在介面上微調萃取出來的問答
       preview_qa_list = []
       for i, qa_item in enumerate(
           st.session_state["gemini_audio_qa"].get("問答清單", [])
